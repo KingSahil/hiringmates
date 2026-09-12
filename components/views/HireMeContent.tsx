@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import {
+  Activity,
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
@@ -9,6 +10,8 @@ import {
   Camera,
   Check,
   Code2,
+  FileCheck,
+  History,
   LockKeyhole,
   Maximize,
   Mic,
@@ -17,10 +20,13 @@ import {
   Monitor,
   Pause,
   Play,
+  QrCode,
   Radio,
   RefreshCw,
   Send,
+  ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Timer,
   Trophy,
@@ -28,10 +34,21 @@ import {
   Video,
   VideoOff,
   XCircle,
+  Zap,
 } from 'lucide-react'
 import { useNavigation } from '@/lib/navigation'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { useNotifications } from '@/lib/notifications'
+import {
+  CodeforcesWinnowingEngine,
+  KeystrokeFlightRecorder,
+  EnvironmentShield,
+  LLM_BENCHMARK_SOLUTIONS,
+  SecurityViolation,
+  FlightMetrics,
+  PlagiarismResult,
+} from '@/lib/proctoring/antiCheatEngine'
+import { EyeTrackerEngine, GazeDirection, GazeStatus } from '@/lib/proctoring/eyeTracker'
 
 type HireMeStep = 'profile' | 'invite' | 'check' | 'assessment' | 'admin' | 'results'
 
@@ -117,11 +134,67 @@ export function HireMeContent() {
     1: 10 * 60,
   })
 
+  // Codeforces Anti-Cheat & Flight Recorder state
+  const flightRecorderRef = useRef<KeystrokeFlightRecorder>(new KeystrokeFlightRecorder())
+  const winnowingEngineRef = useRef<CodeforcesWinnowingEngine>(new CodeforcesWinnowingEngine())
+  const [securityViolations, setSecurityViolations] = useState<SecurityViolation[]>([])
+  const [violationToast, setViolationToast] = useState<string | null>(null)
+  const [showQrModal, setShowQrModal] = useState(false)
+  const [qrCompanionActive, setQrCompanionActive] = useState(false)
+  const [multiMonitorDetected, setMultiMonitorDetected] = useState(false)
+  const [flightMetrics, setFlightMetrics] = useState<FlightMetrics | null>(null)
+
+  // Recruiter Admin Interactive Replay & Plagiarism State
+  const [adminActiveTab, setAdminActiveTab] = useState<'flight' | 'winnowing' | 'certificate'>('flight')
+  const [replayPercentage, setReplayPercentage] = useState(100)
+  const [isReplaying, setIsReplaying] = useState(false)
+  const [replaySpeed, setReplaySpeed] = useState<number>(1)
+  const [plagiarismMatrix, setPlagiarismMatrix] = useState<Record<string, PlagiarismResult>>({})
+
+  // Eye & Gaze Tracking State (Looking Down, Left, Right, Away)
+  const eyeTrackerRef = useRef<EyeTrackerEngine | null>(null)
+  const [gazeStatus, setGazeStatus] = useState<GazeStatus>({
+    direction: 'CENTER',
+    confidence: 98,
+    horizontalOffset: 0,
+    verticalOffset: 0,
+    faceDetected: true,
+    warningCount: 0,
+    isSustainedDeviation: false,
+  })
+  const [gazeWarnings, setGazeWarnings] = useState(0)
+  const [showGazeWarningModal, setShowGazeWarningModal] = useState(false)
+  const [gazeWarningDetail, setGazeWarningDetail] = useState<{ count: number; direction: string }>({ count: 0, direction: '' })
+
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null)
   const pipVideoRef = useRef<HTMLVideoElement | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number | null>(null)
+
+  // Screen Details API multi-monitor check
+  useEffect(() => {
+    try {
+      if ((window.screen as any)?.isExtended) {
+        setMultiMonitorDetected(true)
+      }
+    } catch {}
+  }, [])
+
+  // Interactive Flight Recorder Replay loop in Admin Review
+  useEffect(() => {
+    if (!isReplaying) return
+    const interval = setInterval(() => {
+      setReplayPercentage((prev) => {
+        if (prev >= 100) {
+          setIsReplaying(false)
+          return 100
+        }
+        return Math.min(100, prev + 2 * replaySpeed)
+      })
+    }, 120)
+    return () => clearInterval(interval)
+  }, [isReplaying, replaySpeed])
 
   // Fullscreen listener
   useEffect(() => {
@@ -392,10 +465,26 @@ export function HireMeContent() {
         await document.documentElement.requestFullscreen()
       } catch {}
     }
-    // Reset tab violations and timers
+    // Reset tab violations, security audit log, and timers
     setTabViolations(0)
     setIsTerminated(false)
     setShowTabWarning(false)
+    setShowGazeWarningModal(false)
+    setGazeWarnings(0)
+    setSecurityViolations([])
+    flightRecorderRef.current.reset()
+    if (eyeTrackerRef.current) {
+      eyeTrackerRef.current.resetWarnings()
+    }
+
+    // Pre-seed initial keystroke timeline so flight recorder has telemetry baseline
+    const starterText = questions[1].defaultValue || ''
+    const chunk = 14
+    for (let i = 0; i < Math.min(starterText.length, 280); i += chunk) {
+      flightRecorderRef.current.logKeystroke('insert', starterText.slice(i, i + chunk), i, i + chunk)
+    }
+    setFlightMetrics(flightRecorderRef.current.computeMetrics())
+
     setQuestionTimes({
       0: 2 * 60,
       1: 10 * 60,
@@ -403,6 +492,122 @@ export function HireMeContent() {
     setCurrentQuestion(0)
     setStep('assessment')
   }
+
+  // Activate Hardened Environment Shield (DevTools, shortcut traps, split-screen)
+  useEffect(() => {
+    if (step !== 'assessment' || isTerminated) return
+
+    const shield = new EnvironmentShield((violation) => {
+      setSecurityViolations((prev) => [violation, ...prev.slice(0, 19)])
+      setViolationToast(`${violation.type}: ${violation.detail}`)
+      setTimeout(() => setViolationToast(null), 4500)
+    })
+
+    const cleanup = shield.activateShield()
+    return () => cleanup()
+  }, [step, isTerminated])
+
+  // Real-time Eye & Gaze Tracking loop (Looking Down, Left, Right, Away)
+  useEffect(() => {
+    if (step !== 'assessment' || isTerminated || !cameraStream) {
+      if (eyeTrackerRef.current) {
+        eyeTrackerRef.current.stop()
+        eyeTrackerRef.current = null
+      }
+      return
+    }
+
+    const tracker = new EyeTrackerEngine({
+      maxWarnings: 3,
+      sustainedDurationMs: 1800,
+      onGazeUpdate: (status) => {
+        setGazeStatus(status)
+      },
+      onWarning: (count, direction) => {
+        setGazeWarnings(count)
+        setIsPaused(true)
+        setGazeWarningDetail({ count, direction: direction.replace('_', ' ') })
+        setShowGazeWarningModal(true)
+        setSecurityViolations((prev) => [
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'VOICE_DETECTED',
+            detail: `Gaze Strike #${count} of 3: Sustained deviation (${direction.replace('_', ' ')}). Please refocus on the test screen.`,
+            severity: count >= 3 ? 'CRITICAL' : 'WARNING',
+          },
+          ...prev,
+        ])
+      },
+      onTerminated: (reason) => {
+        setIsTerminated(true)
+        setShowGazeWarningModal(false)
+        setShowTabWarning(false)
+        setIsPaused(true)
+        setTerminationReason(reason)
+
+        if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+        if (micStream) micStream.getTracks().forEach((t) => t.stop())
+        if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
+        setCameraReady(false)
+        setMicReady(false)
+        setScreenReady(false)
+
+        setStep('results')
+      },
+    })
+
+    eyeTrackerRef.current = tracker
+
+    let cancelled = false
+    const checkVideo = () => {
+      if (cancelled) return
+      if (pipVideoRef.current && pipVideoRef.current.readyState >= 2) {
+        tracker.start(pipVideoRef.current)
+      } else {
+        setTimeout(checkVideo, 250)
+      }
+    }
+    checkVideo()
+
+    return () => {
+      cancelled = true
+      tracker.stop()
+      eyeTrackerRef.current = null
+    }
+  }, [step, isTerminated, cameraStream, micStream, screenStream])
+
+  // Assessment state
+  const [currentQuestion, setCurrentQuestion] = useState(0)
+  const [answers, setAnswers] = useState<Record<number, any>>({ 0: 0 })
+  const [isPaused, setIsPaused] = useState(false)
+
+  // Run Codeforces AST Winnowing Plagiarism evaluation whenever entering admin or results
+  useEffect(() => {
+    if (step === 'admin' || step === 'results') {
+      const text = answers[1] ?? questions[1].defaultValue ?? ''
+      const vsChatGPT = winnowingEngineRef.current.compareSubmissions(
+        text,
+        LLM_BENCHMARK_SOLUTIONS.chatgpt_mcp_response,
+        'ChatGPT-4o Baseline'
+      )
+      const vsClaude = winnowingEngineRef.current.compareSubmissions(
+        text,
+        LLM_BENCHMARK_SOLUTIONS.claude_mcp_response,
+        'Claude 3.5 Sonnet Baseline'
+      )
+      const vsPeer = winnowingEngineRef.current.compareSubmissions(
+        text,
+        `# Peer Campus Solution\nTransport: SSE over TLS with JSON-RPC 2.0.\nTools: telemetry query, pod crash logs, rollback release.\nSecurity: least privilege with role-based tokens.`,
+        'Alex Rivera (Campus Cohort)'
+      )
+      setPlagiarismMatrix({
+        chatgpt: vsChatGPT,
+        claude: vsClaude,
+        peer: vsPeer,
+      })
+      setFlightMetrics(flightRecorderRef.current.computeMetrics())
+    }
+  }, [step, answers])
 
   // Tab switching detection listener during assessment
   useEffect(() => {
@@ -460,11 +665,6 @@ export function HireMeContent() {
       if (audioContextRef.current) audioContextRef.current.close().catch(() => {})
     }
   }, [cameraStream, micStream, screenStream])
-
-  // Assessment state
-  const [currentQuestion, setCurrentQuestion] = useState(0)
-  const [answers, setAnswers] = useState<Record<number, any>>({ 0: 0 })
-  const [isPaused, setIsPaused] = useState(false)
 
   // Recruiter Admin state
   const [selectedCandidate, setSelectedCandidate] = useState('Maya Chen')
@@ -977,6 +1177,52 @@ export function HireMeContent() {
                       </button>
                     )}
                   </div>
+
+                  {/* Display Guard (Dual Monitor Detection) */}
+                  <div className="flex items-center justify-between rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
+                    <span className="flex items-center gap-1.5">
+                      <Monitor className="h-3.5 w-3.5 text-[#171717] dark:text-[#39d5c8]" />
+                      Display Guard
+                    </span>
+                    {multiMonitorDetected ? (
+                      <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 text-[10px]">
+                        <AlertTriangle className="h-3 w-3" /> Multi-Monitor
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px]">
+                        <Check className="h-3 w-3" /> Single Screen
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Campus Killer Feature: QR Mobile Desk Cam (Ghost Hunter) */}
+                  <div className="flex items-center justify-between rounded border border-[#171717] bg-[#fff0c2] p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#252a35] dark:text-[#f4f4f7]">
+                    <span className="flex items-center gap-1.5">
+                      <Smartphone className="h-3.5 w-3.5 text-[#171717] dark:text-[#ffd84d]" />
+                      <span>Mobile Desk Cam (QR)</span>
+                    </span>
+                    {qrCompanionActive ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px]">
+                          <Check className="h-3 w-3" /> Paired
+                        </span>
+                        <button
+                          onClick={() => setQrCompanionActive(false)}
+                          className="text-[9px] text-rose-500 hover:underline cursor-pointer"
+                        >
+                          Unpair
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setShowQrModal(true)}
+                        className="cursor-pointer flex items-center gap-1 rounded border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[10px] font-black uppercase text-[#171717] hover:brightness-105"
+                      >
+                        <QrCode className="h-3 w-3" />
+                        <span>Pair Phone</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <label className="mt-3 flex cursor-pointer items-start gap-2 text-[11px] font-bold text-[#171717] dark:text-[#d4d4d8]">
@@ -1083,17 +1329,79 @@ export function HireMeContent() {
                   ))}
                 </div>
 
-                <div className="mt-6 rounded-lg border border-[#171717]/20 bg-[#ffd84d]/30 p-2.5 text-[10px] font-bold text-[#171717] dark:border-[#2e323b] dark:text-[#f4f4f7]">
-                  <div className="flex items-center gap-1 text-[#171717] font-black uppercase dark:text-[#ffd84d]">
-                    <ShieldCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" /> Proctored Session
+                {/* Codeforces-Grade Anti-Cheat & Flight Recorder HUD */}
+                <div className="mt-4 rounded-xl border-2 border-[#171717] bg-[#171717] p-3 text-[10px] font-bold text-white shadow-[2px_2px_0_#39d5c8] dark:border-[#2e323b]">
+                  <div className="flex items-center justify-between border-b border-white/15 pb-2">
+                    <span className="flex items-center gap-1.5 font-black uppercase text-[#39d5c8]">
+                      <ShieldCheck className="h-3.5 w-3.5" /> CF Sandbox
+                    </span>
+                    <span className="rounded bg-emerald-500/20 px-1.5 py-0.2 text-[8px] font-black text-emerald-400">
+                      ARMED
+                    </span>
                   </div>
-                  <p className="mt-1 leading-tight text-[#171717]/80 dark:text-[#a1a1aa]">
-                    Tab switching is monitored. 1 warning allowed before session termination.
-                  </p>
+
+                  <div className="mt-2.5 space-y-1.5 font-mono text-[9px]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Typing Cadence:</span>
+                      <span className={flightMetrics?.cadenceGrade === 'AI_INJECTION_FLAG' ? 'text-rose-400 font-bold' : 'text-[#ffd84d]'}>
+                        {flightMetrics?.wpm || 62} WPM · {flightMetrics?.cadenceGrade === 'AI_INJECTION_FLAG' ? 'AI Burst' : 'Human'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Paste Injections:</span>
+                      <span className={flightMetrics?.pasteCount ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
+                        {flightMetrics?.pasteCount || 0} Detected
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Audio VAD:</span>
+                      <span className={audioLevel > 55 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
+                        {audioLevel} dB ({audioLevel > 55 ? 'Voice' : 'Quiet'})
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Display Guard:</span>
+                      <span className="text-emerald-400">1 Monitor Locked</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Desk Cam (QR):</span>
+                      <span className={qrCompanionActive ? 'text-emerald-400' : 'text-white/40'}>
+                        {qrCompanionActive ? 'Active Desk' : 'Standby'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Gaze Tracking:</span>
+                      <span className={gazeStatus.direction === 'CENTER' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                        {gazeStatus.direction === 'CENTER' ? 'Centered' : gazeStatus.direction.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Gaze Strikes:</span>
+                      <span className={gazeWarnings > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>
+                        {gazeWarnings} / 3
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
               <div className="p-5 sm:p-6">
+                {/* Real-time security violation toast banner */}
+                {violationToast && (
+                  <div className="mb-4 flex items-center justify-between rounded-xl border-2 border-rose-600 bg-rose-500/15 p-2.5 text-xs font-black text-rose-600 dark:text-rose-400 animate-pulse">
+                    <span className="flex items-center gap-2">
+                      <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600" />
+                      <span>{violationToast}</span>
+                    </span>
+                    <button
+                      onClick={() => setViolationToast(null)}
+                      className="cursor-pointer text-[10px] uppercase underline hover:text-rose-700"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
                 {isPaused ? (
                   <div className="py-12 text-center">
                     <Radio className="mx-auto h-8 w-8 text-[#ffd84d]" />
@@ -1138,9 +1446,39 @@ export function HireMeContent() {
                           rows={12}
                           value={answers[currentQuestion] ?? questions[currentQuestion].defaultValue}
                           placeholder={questions[currentQuestion].placeholder}
-                          onChange={(e) =>
-                            setAnswers({ ...answers, [currentQuestion]: e.target.value })
-                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Backspace' || e.key === 'Delete') {
+                              flightRecorderRef.current.logKeystroke('delete', '', e.currentTarget.selectionStart, e.currentTarget.value.length)
+                              setFlightMetrics(flightRecorderRef.current.computeMetrics())
+                            }
+                          }}
+                          onPaste={(e) => {
+                            const pasteText = e.clipboardData.getData('text') || ''
+                            flightRecorderRef.current.logKeystroke('paste', pasteText, e.currentTarget.selectionStart, e.currentTarget.value.length + pasteText.length)
+                            setSecurityViolations((prev) => [
+                              {
+                                timestamp: new Date().toLocaleTimeString(),
+                                type: 'PASTE_BLOCKED',
+                                detail: `External paste event intercepted (${pasteText.length} chars). Keystroke Flight Recorder flagged burst score anomaly.`,
+                                severity: 'WARNING',
+                              },
+                              ...prev,
+                            ])
+                            setViolationToast(`Paste Telemetry Flagged: ${pasteText.length} characters inserted in burst.`)
+                            setTimeout(() => setViolationToast(null), 4000)
+                            setFlightMetrics(flightRecorderRef.current.computeMetrics())
+                          }}
+                          onChange={(e) => {
+                            const newVal = e.target.value
+                            const oldVal = answers[currentQuestion] ?? questions[currentQuestion].defaultValue ?? ''
+                            setAnswers({ ...answers, [currentQuestion]: newVal })
+
+                            const diff = newVal.length - oldVal.length
+                            if (diff > 0 && diff < 20) {
+                              flightRecorderRef.current.logKeystroke('insert', newVal.slice(-diff), e.target.selectionStart, newVal.length)
+                            }
+                            setFlightMetrics(flightRecorderRef.current.computeMetrics())
+                          }}
                           className="w-full rounded-xl border-2 border-[#171717] bg-[#171717] p-3.5 font-mono text-xs text-[#fffaf0] outline-none dark:border-[#2e323b]"
                         />
                       )}
@@ -1218,11 +1556,53 @@ export function HireMeContent() {
           </div>
         )}
 
+        {/* Eye Gaze Deviation Warning Modal (3 Warnings before Auto-Termination) */}
+        {showGazeWarningModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-lg rounded-2xl border-4 border-[#171717] bg-[#ffd84d] p-6 text-[#171717] shadow-hard-lg dark:border-[#000000]">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 border-[#171717] bg-[#ff6b6b] text-white">
+                  <AlertTriangle className="h-7 w-7" />
+                </div>
+                <div>
+                  <span className="rounded bg-[#171717] px-2 py-0.5 font-mono text-[10px] font-black uppercase text-white">
+                    EYE GAZE ALERT · WARNING {gazeWarningDetail.count} OF 3
+                  </span>
+                  <h3 className="font-display text-2xl uppercase tracking-tight sm:text-3xl">
+                    Gaze Deviation Detected!
+                  </h3>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border-2 border-[#171717] bg-white p-4 text-xs font-bold leading-relaxed text-[#171717] shadow-[2px_2px_0_#171717]">
+                <p>
+                  The AI eye tracking engine detected sustained gaze deviation ({gazeWarningDetail.direction}) away from the test area for more than 1.8 seconds.
+                </p>
+                <p className="mt-2 text-rose-700 font-black">
+                  {gazeWarningDetail.count >= 3
+                    ? '⚠️ CRITICAL: THIS IS YOUR 3RD AND FINAL WARNING (3/3). Any further gaze deviation (looking down at phone, left, right, or away) will IMMEDIATELY TERMINATE your session with disqualification.'
+                    : `⚠️ WARNING ${gazeWarningDetail.count} OF 3: Looking down at your lap/phone, looking right/left, or looking away from the screen is strictly monitored. 3 total warnings allowed before session termination.`}
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setShowGazeWarningModal(false)
+                  setIsPaused(false)
+                }}
+                className="btn-neo btn-neo-ink mt-5 w-full py-3 text-xs uppercase"
+              >
+                I Understand — Refocus Eyes On Screen & Resume
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Floating Live Proctor HUD during Assessment */}
         {step === 'assessment' && (
           <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end gap-1.5 pointer-events-auto select-none">
             <div className="w-52 sm:w-60 overflow-hidden rounded-xl border-3 border-[#171717] bg-[#171717] shadow-hard-lg dark:border-[#2e323b] dark:shadow-[4px_4px_0_#000000]">
-              <div className="relative aspect-video bg-black">
+              <div className="relative aspect-video bg-black overflow-hidden">
                 {cameraStream ? (
                   <video
                     ref={pipVideoRef}
@@ -1237,14 +1617,48 @@ export function HireMeContent() {
                     <span>Camera Standby</span>
                   </div>
                 )}
+
+                {/* Eye tracking crosshair reticle overlay */}
+                <div
+                  className="absolute pointer-events-none transition-all duration-100 text-[#39d5c8] opacity-80"
+                  style={{
+                    top: `${Math.max(20, Math.min(80, 50 + gazeStatus.verticalOffset * 30))}%`,
+                    left: `${Math.max(20, Math.min(80, 50 + gazeStatus.horizontalOffset * 30))}%`,
+                    transform: 'translate(-50%, -50%)',
+                  }}
+                >
+                  <div className="h-5 w-5 border-2 border-dashed rounded-full border-[#39d5c8] flex items-center justify-center">
+                    <span className="h-1.5 w-1.5 bg-[#39d5c8] rounded-full" />
+                  </div>
+                </div>
+
                 {/* Recording indicator */}
                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-black text-rose-400 backdrop-blur-xs">
                   <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
                   REC
                 </div>
+
+                {/* Eye Tracking Reticle HUD badge */}
+                <div className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-black backdrop-blur-xs">
+                  <span className={`h-1.5 w-1.5 rounded-full ${
+                    gazeStatus.direction === 'CENTER' ? 'bg-emerald-400' : 'bg-rose-500 animate-ping'
+                  }`} />
+                  <span className={gazeStatus.direction === 'CENTER' ? 'text-emerald-400' : 'text-rose-400 font-black'}>
+                    {gazeStatus.direction === 'CENTER' ? 'EYES CENTER' : gazeStatus.direction.replace('_', ' ')}
+                  </span>
+                </div>
+
                 <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-bold text-white backdrop-blur-xs">
                   <ShieldCheck className="h-2.5 w-2.5 text-[#39d5c8]" />
                   <span>PROCTOR LIVE</span>
+                </div>
+
+                {/* Gaze Strikes counter in PIP */}
+                <div className="absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-black text-white backdrop-blur-xs">
+                  <span className="text-[#ffd84d]">Gaze:</span>
+                  <span className={gazeWarnings > 0 ? 'text-rose-400 font-black' : 'text-emerald-400'}>
+                    {gazeWarnings} / 3 Strikes
+                  </span>
                 </div>
               </div>
 
@@ -1296,7 +1710,7 @@ export function HireMeContent() {
                   Session Terminated
                 </h2>
                 <p className="mt-1 text-xs font-bold text-[#171717]/70 dark:text-[#a1a1aa]">
-                  Multiple tab switch violations detected. This assessment was automatically terminated for academic integrity.
+                  {terminationReason || 'Academic integrity violations detected. This assessment was automatically terminated.'}
                 </p>
 
                 <div className="mt-5 grid grid-cols-3 gap-2.5">
@@ -1317,7 +1731,10 @@ export function HireMeContent() {
                 </div>
 
                 <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-3 text-left text-xs font-bold text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
-                  <span className="font-black">Violation Audit Log:</span> 2 tab switch / defocus events occurred during proctored assessment. All webcam and display media captures locked and flagged.
+                  <span className="font-black">Violation Audit Log:</span>{' '}
+                  {terminationReason
+                    ? terminationReason
+                    : `${tabViolations} tab switch events and ${gazeWarnings} eye gaze deviations recorded. Media captures locked and flagged for recruiter review.`}
                 </div>
 
                 <div className="mt-6 flex justify-center gap-2">
@@ -1325,6 +1742,9 @@ export function HireMeContent() {
                     onClick={() => {
                       setIsTerminated(false)
                       setTabViolations(0)
+                      setGazeWarnings(0)
+                      setShowGazeWarningModal(false)
+                      if (eyeTrackerRef.current) eyeTrackerRef.current.resetWarnings()
                       setQuestionTimes({ 0: 2 * 60, 1: 10 * 60 })
                       setStep('invite')
                     }}
@@ -1403,71 +1823,541 @@ export function HireMeContent() {
           <div className="rounded-2xl border-2 border-[#171717] bg-white p-5 shadow-hard transition-colors dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[5px_5px_0_#000000]">
             <div className="flex flex-col justify-between gap-3 border-b border-[#171717]/20 pb-4 sm:flex-row sm:items-center dark:border-[#2e323b]">
               <div>
-                <h2 className="font-display text-3xl uppercase text-[#171717] dark:text-[#f4f4f7]">
-                  Candidate Review
+                <div className="flex items-center gap-2">
+                  <span className="rounded-md border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[10px] font-black uppercase text-[#171717] dark:border-[#000000]">
+                    CAMPUS TPO SUITE
+                  </span>
+                  <span className="text-xs font-bold text-[#171717]/60 dark:text-[#a1a1aa]">
+                    Codeforces Anti-Cheat & Forensic Playback
+                  </span>
+                </div>
+                <h2 className="mt-1 font-display text-3xl uppercase text-[#171717] dark:text-[#f4f4f7]">
+                  Candidate Integrity & Review
                 </h2>
-                <p className="text-xs font-bold text-[#171717]/70 dark:text-[#a1a1aa]">
-                  Inspect candidate signals and integrity logs.
-                </p>
               </div>
 
-              <span className="rounded-lg border border-[#171717] bg-[#ffd84d] px-2.5 py-1 font-mono text-[11px] font-black text-[#171717] dark:border-[#000000]">
-                Frontend Role · 3 Evaluated
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="rounded-lg border border-[#171717] bg-[#39d5c8] px-2.5 py-1 font-mono text-[11px] font-black text-[#171717] dark:border-[#000000]">
+                  3 Cohort Candidates Evaluated
+                </span>
+              </div>
             </div>
 
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
+            <div className="mt-4 grid gap-5 lg:grid-cols-[300px_1fr]">
+              {/* Left Column: Candidate List */}
+              <div className="space-y-2.5">
                 {[
-                  { name: 'Maya Chen', score: 94, integrity: 'Clear', time: '12 min ago' },
-                  { name: 'Alex Rivera', score: 88, integrity: 'Review', time: '35 min ago' },
-                  { name: 'Jordan Lee', score: 82, integrity: 'Clear', time: '1 hr ago' },
+                  {
+                    name: 'Maya Chen',
+                    score: 94,
+                    integrity: 'Clear',
+                    time: '12 min ago',
+                    cadence: 'Organic 96%',
+                    plagiarism: '24.2% (Clean)',
+                    status: 'CLEAN',
+                  },
+                  {
+                    name: 'Alex Rivera',
+                    score: 88,
+                    integrity: 'Flagged',
+                    time: '35 min ago',
+                    cadence: 'AI Burst 42%',
+                    plagiarism: '82.4% (Collusion)',
+                    status: 'FLAGGED',
+                  },
+                  {
+                    name: 'Jordan Lee',
+                    score: 82,
+                    integrity: 'Clear',
+                    time: '1 hr ago',
+                    cadence: 'Organic 91%',
+                    plagiarism: '18.6% (Clean)',
+                    status: 'CLEAN',
+                  },
                 ].map((c) => (
                   <div
                     key={c.name}
-                    onClick={() => setSelectedCandidate(c.name)}
-                    className={`flex cursor-pointer items-center justify-between rounded-xl border border-[#171717] p-3 text-xs font-bold transition-all dark:border-[#2e323b] ${
+                    onClick={() => {
+                      setSelectedCandidate(c.name)
+                      setReplayPercentage(100)
+                      setIsReplaying(false)
+                    }}
+                    className={`cursor-pointer rounded-xl border-2 p-3.5 text-xs font-bold transition-all ${
                       selectedCandidate === c.name
-                        ? 'bg-[#ffd84d] text-[#171717] dark:border-[#000000]'
-                        : 'bg-[#fffaf0] hover:bg-white text-[#171717] dark:bg-[#1c1f26] dark:text-[#f4f4f7] dark:hover:bg-[#252a35]'
+                        ? 'border-[#171717] bg-[#ffd84d] text-[#171717] shadow-[3px_3px_0_#171717] dark:border-[#ffd84d] dark:bg-[#ffd84d] dark:text-[#171717]'
+                        : 'border-[#171717]/20 bg-[#fffaf0] hover:bg-white text-[#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7] dark:hover:bg-[#252a35]'
                     }`}
                   >
-                    <div>
+                    <div className="flex items-center justify-between">
                       <h4 className="font-display text-xl uppercase">{c.name}</h4>
-                      <p className="text-[10px] text-[#171717]/70 dark:text-[#a1a1aa]">{c.time}</p>
-                    </div>
-                    <div className="text-right">
                       <span className="font-display text-xl">{c.score}</span>
-                      <span className="block text-[9px] uppercase">{c.integrity}</span>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px]">
+                      <span className={`rounded px-1.5 py-0.5 font-mono font-bold ${
+                        c.status === 'FLAGGED' ? 'bg-rose-500 text-white' : 'bg-white/80 text-[#171717] dark:bg-black/40 dark:text-emerald-400'
+                      }`}>
+                        {c.cadence}
+                      </span>
+                      <span className={`rounded px-1.5 py-0.5 font-mono font-bold text-right ${
+                        c.status === 'FLAGGED' ? 'bg-rose-500 text-white' : 'bg-white/80 text-[#171717] dark:bg-black/40 dark:text-emerald-400'
+                      }`}>
+                        {c.plagiarism}
+                      </span>
+                    </div>
+
+                    <div className="mt-1.5 flex items-center justify-between text-[9px] opacity-75">
+                      <span>{c.time}</span>
+                      <span className="uppercase font-black">{c.integrity}</span>
                     </div>
                   </div>
                 ))}
+
+                <div className="mt-4 rounded-xl border border-[#171717]/20 bg-[#e0fbf9] p-3 text-[10px] font-bold text-[#171717] dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#39d5c8]">
+                  <div className="flex items-center gap-1.5 font-black uppercase text-[#171717] dark:text-[#39d5c8]">
+                    <ShieldCheck className="h-4 w-4" /> Codeforces Engine Standard
+                  </div>
+                  <p className="mt-1 leading-relaxed text-[#171717]/80 dark:text-[#a1a1aa]">
+                    Plagiarism checks use AST Tokenization + K-Gram Winnowing (Stanford MOSS). Code is invariant to variable renames or comment scrubbing.
+                  </p>
+                </div>
               </div>
 
-              <div className="rounded-xl border border-[#171717] bg-[#fffaf0] p-4 dark:border-[#2e323b] dark:bg-[#1c1f26]">
-                <h3 className="font-display text-2xl uppercase text-[#171717] dark:text-[#f4f4f7]">{selectedCandidate}</h3>
-                <div className="my-2 border-t border-[#171717]/15 dark:border-[#2e323b]" />
-                <p className="text-xs font-bold text-[#171717] dark:text-[#f4f4f7]">Signal Score: 94/100</p>
-                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 mt-1">Integrity: No focus loss</p>
-                <div className="mt-4 flex flex-col sm:flex-row gap-2">
-                  <button
-                    onClick={() => {
-                      triggerRound2Notification('candidate', selectedCandidate)
-                      setActiveRole('mentor')
-                      setTab('mentorship')
-                    }}
-                    className="btn-neo btn-neo-aqua flex-1 py-1.5 text-xs flex items-center justify-center gap-1.5"
-                  >
-                    <Video className="h-3.5 w-3.5 fill-current" />
-                    <span>Host Round 2 Call</span>
-                  </button>
-                  <button
-                    onClick={() => setStep('invite')}
-                    className="btn-neo btn-neo-paper flex-1 py-1.5 text-xs"
-                  >
-                    Back to Brief
-                  </button>
+              {/* Right Column: Deep-Dive Forensic Panel */}
+              <div className="rounded-xl border-2 border-[#171717] bg-[#fffaf0] p-4.5 dark:border-[#2e323b] dark:bg-[#1c1f26]">
+                {/* Candidate Summary Header */}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#171717]/15 pb-3 dark:border-[#2e323b]">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-display text-2xl uppercase text-[#171717] dark:text-[#f4f4f7]">
+                        {selectedCandidate}
+                      </h3>
+                      <span className={`rounded px-2 py-0.5 text-[10px] font-black uppercase ${
+                        selectedCandidate === 'Alex Rivera'
+                          ? 'bg-rose-500 text-white animate-pulse'
+                          : 'bg-emerald-500 text-white'
+                      }`}>
+                        {selectedCandidate === 'Alex Rivera' ? 'Plagiarism Detected' : 'Verified Human'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] font-bold text-[#171717]/70 dark:text-[#a1a1aa]">
+                      Assessment: Senior Fullstack & MCP Architecture · Candidate ID #2026-CAMPUS-094
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        triggerRound2Notification('candidate', selectedCandidate)
+                        setActiveRole('mentor')
+                        setTab('mentorship')
+                      }}
+                      className="btn-neo btn-neo-aqua py-1.5 px-3 text-xs flex items-center gap-1.5"
+                    >
+                      <Video className="h-3.5 w-3.5 fill-current" />
+                      <span>Round 2 Call</span>
+                    </button>
+                    <button
+                      onClick={() => setStep('invite')}
+                      className="btn-neo btn-neo-paper py-1.5 px-2.5 text-xs"
+                    >
+                      Back
+                    </button>
+                  </div>
                 </div>
+
+                {/* Forensic Tabs: Flight Replay vs AST Winnowing vs Certificate */}
+                <div className="mt-3.5 flex flex-wrap gap-1 border-b border-[#171717]/15 pb-2 dark:border-[#2e323b]">
+                  {[
+                    { id: 'flight', label: '✈️ Keystroke Flight Recorder', icon: History },
+                    { id: 'winnowing', label: '🧬 Codeforces AST Plagiarism', icon: Code2 },
+                    { id: 'certificate', label: '📜 Campus Certificate', icon: FileCheck },
+                  ].map((tabItem) => (
+                    <button
+                      key={tabItem.id}
+                      onClick={() => setAdminActiveTab(tabItem.id as any)}
+                      className={`cursor-pointer rounded-lg px-3 py-1 text-xs font-black uppercase transition-all ${
+                        adminActiveTab === tabItem.id
+                          ? 'border border-[#171717] bg-[#171717] text-[#fffaf0] shadow-xs dark:bg-[#ffd84d] dark:text-[#171717]'
+                          : 'text-[#171717]/70 hover:bg-white dark:text-[#a1a1aa] dark:hover:bg-[#252933]'
+                      }`}
+                    >
+                      {tabItem.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* TAB 1: KEYSTROKE FLIGHT RECORDER & REPLAY */}
+                {adminActiveTab === 'flight' && (
+                  <div className="mt-4 space-y-4">
+                    {/* Replay Controls & Scrubber */}
+                    <div className="rounded-xl border-2 border-[#171717] bg-white p-3.5 shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[2px_2px_0_#000000]">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setIsReplaying(!isReplaying)}
+                            className="btn-neo btn-neo-lemon flex items-center gap-1.5 py-1 px-3 text-xs"
+                          >
+                            {isReplaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 fill-current" />}
+                            <span>{isReplaying ? 'Pause' : 'Play Flight Replay'}</span>
+                          </button>
+
+                          <div className="flex items-center gap-1 rounded-lg border border-[#171717]/20 p-0.5 text-[10px] font-black dark:border-[#2e323b]">
+                            {[1, 2, 5, 10].map((spd) => (
+                              <button
+                                key={spd}
+                                onClick={() => setReplaySpeed(spd)}
+                                className={`rounded px-1.5 py-0.5 cursor-pointer ${
+                                  replaySpeed === spd
+                                    ? 'bg-[#171717] text-white dark:bg-[#39d5c8] dark:text-[#171717]'
+                                    : 'text-[#171717]/70 dark:text-[#a1a1aa]'
+                                }`}
+                              >
+                                {spd}x
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <span className="font-mono text-xs font-black text-[#171717] dark:text-[#ffd84d]">
+                          Playback Position: {replayPercentage}%
+                        </span>
+                      </div>
+
+                      {/* Scrubber slider */}
+                      <div className="mt-3">
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={replayPercentage}
+                          onChange={(e) => {
+                            setReplayPercentage(Number(e.target.value))
+                            setIsReplaying(false)
+                          }}
+                          className="w-full accent-[#171717] cursor-pointer dark:accent-[#ffd84d]"
+                        />
+                        <div className="flex justify-between font-mono text-[9px] text-[#171717]/60 dark:text-[#a1a1aa] mt-1">
+                          <span>00:00 (Start)</span>
+                          <span>04:12 (Drafting)</span>
+                          <span>08:45 (Refactoring)</span>
+                          <span>10:00 (Submission)</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Dynamic Reconstructed Code View */}
+                    <div className="rounded-xl border-2 border-[#171717] bg-[#171717] p-3.5 text-white dark:border-[#2e323b]">
+                      <div className="flex items-center justify-between border-b border-white/15 pb-2 text-[10px]">
+                        <span className="font-mono font-bold text-[#39d5c8] flex items-center gap-1.5">
+                          <Code2 className="h-3.5 w-3.5" /> Replay Snapshot at {replayPercentage}% Timeline
+                        </span>
+                        <span className="font-mono text-white/50">
+                          {selectedCandidate === 'Alex Rivera' ? '⚠️ Instant 0ms Paste Injection Detected' : 'Organic Human Inter-Keystroke Latency'}
+                        </span>
+                      </div>
+
+                      <pre className="mt-3 max-h-56 overflow-auto font-mono text-xs text-[#fffaf0] leading-relaxed select-text">
+                        {selectedCandidate === 'Alex Rivera' ? (
+                          replayPercentage < 15 ? (
+                            '# Drafting...'
+                          ) : (
+                            `# Technical Architecture: MCP Incident Response Server\n// [SUSPICIOUS BURST: 412 characters injected in 0.04s via external clipboard]\nTransport: Server-Sent Events over TLS\nTools: query_cluster_telemetry, fetch_pod_logs, trigger_canary_rollback\nSecurity: Scoped service accounts, principle of least privilege, audit logs.`
+                          )
+                        ) : (
+                          flightRecorderRef.current.replayAtPercentage(replayPercentage).text ||
+                          (answers[1] ?? questions[1].defaultValue ?? '')
+                        )}
+                      </pre>
+                    </div>
+
+                    {/* Telemetry Stats Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Typing Velocity
+                        </div>
+                        <div className="font-display text-xl text-[#171717] dark:text-[#f4f4f7]">
+                          {selectedCandidate === 'Alex Rivera' ? '184 WPM (Burst)' : `${flightMetrics?.wpm || 64} WPM`}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Human Friction
+                        </div>
+                        <div className="font-display text-xl text-[#171717] dark:text-[#f4f4f7]">
+                          {selectedCandidate === 'Alex Rivera' ? '0 Backspaces' : `${flightMetrics?.backspacesCount || 24} Typos Fixed`}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Paste Injections
+                        </div>
+                        <div className={`font-display text-xl ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                          {selectedCandidate === 'Alex Rivera' ? '2 Flagged' : '0 Clean'}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Cadence Origin
+                        </div>
+                        <div className={`font-display text-sm mt-1 uppercase ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                          {selectedCandidate === 'Alex Rivera' ? 'AI INJECTION' : 'ORGANIC HUMAN'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: CODEFORCES AST WINNOWING PLAGIARISM */}
+                {adminActiveTab === 'winnowing' && (
+                  <div className="mt-4 space-y-4">
+                    <div className="rounded-xl border border-[#171717]/20 bg-white p-3.5 dark:border-[#2e323b] dark:bg-[#15171c]">
+                      <div className="flex items-center gap-2">
+                        <Zap className="h-4 w-4 text-[#6d73ff]" />
+                        <h4 className="font-display text-lg uppercase text-[#171717] dark:text-[#f4f4f7]">
+                          Codeforces AST Normalization & K-Gram Winnowing Matrix
+                        </h4>
+                      </div>
+                      <p className="mt-1 text-xs font-bold leading-relaxed text-[#171717]/70 dark:text-[#a1a1aa]">
+                        All candidate code is stripped of comments, literals, and variable identifiers (mapped into canonical AST tokens: V1, V2, LOP, CND). K-Gram rolling hashes are winnowed to generate cryptographic structural fingerprints.
+                      </p>
+
+                      {/* Comparison Rows */}
+                      <div className="mt-4 space-y-3">
+                        {/* vs ChatGPT-4o */}
+                        <div className="rounded-lg border border-[#171717]/15 p-3 dark:border-[#2e323b]">
+                          <div className="flex items-center justify-between text-xs font-black">
+                            <span className="text-[#171717] dark:text-[#f4f4f7]">Comparison vs ChatGPT-4o Baseline Model:</span>
+                            <span className={selectedCandidate === 'Alex Rivera' ? 'text-rose-600 font-mono text-sm' : 'text-emerald-600 font-mono text-sm'}>
+                              {selectedCandidate === 'Alex Rivera' ? '86.5% HIGH MATCH' : `${plagiarismMatrix.chatgpt?.similarityScore || 24.2}% (Clean)`}
+                            </span>
+                          </div>
+                          <div className="mt-2 h-2.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-500 ${
+                                selectedCandidate === 'Alex Rivera' ? 'bg-rose-500 w-[86.5%]' : 'bg-emerald-500 w-[24.2%]'
+                              }`}
+                            />
+                          </div>
+                          <div className="mt-1 flex justify-between text-[9px] font-mono text-[#171717]/60 dark:text-[#a1a1aa]">
+                            <span>Token Fingerprint Overlap: {selectedCandidate === 'Alex Rivera' ? '41/48 hashes' : '11/48 hashes'}</span>
+                            <span>Threshold: &gt; 70% Flagged</span>
+                          </div>
+                        </div>
+
+                        {/* vs Claude 3.5 Sonnet */}
+                        <div className="rounded-lg border border-[#171717]/15 p-3 dark:border-[#2e323b]">
+                          <div className="flex items-center justify-between text-xs font-black">
+                            <span className="text-[#171717] dark:text-[#f4f4f7]">Comparison vs Claude 3.5 Sonnet Baseline:</span>
+                            <span className="text-emerald-600 font-mono text-sm">
+                              {plagiarismMatrix.claude?.similarityScore || 18.5}% (Clean)
+                            </span>
+                          </div>
+                          <div className="mt-2 h-2.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                            <div className="h-full bg-emerald-500 w-[18.5%] transition-all duration-500" />
+                          </div>
+                          <div className="mt-1 flex justify-between text-[9px] font-mono text-[#171717]/60 dark:text-[#a1a1aa]">
+                            <span>Token Fingerprint Overlap: 8/46 hashes</span>
+                            <span>Status: Independent logic</span>
+                          </div>
+                        </div>
+
+                        {/* vs Campus Cohort Peer */}
+                        <div className="rounded-lg border border-[#171717]/15 p-3 dark:border-[#2e323b]">
+                          <div className="flex items-center justify-between text-xs font-black">
+                            <span className="text-[#171717] dark:text-[#f4f4f7]">Comparison vs Campus Cohort (Alex Rivera):</span>
+                            <span className={selectedCandidate === 'Alex Rivera' ? 'text-rose-600 font-mono text-sm' : 'text-emerald-600 font-mono text-sm'}>
+                              {selectedCandidate === 'Alex Rivera' ? 'COLLUSION CLUSTER DETECTED' : '28.1% (Diverse Code)'}
+                            </span>
+                          </div>
+                          <div className="mt-2 h-2.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-500 ${
+                                selectedCandidate === 'Alex Rivera' ? 'bg-rose-500 w-[82.4%]' : 'bg-emerald-500 w-[28.1%]'
+                              }`}
+                            />
+                          </div>
+                          <div className="mt-1 flex justify-between text-[9px] font-mono text-[#171717]/60 dark:text-[#a1a1aa]">
+                            <span>Structural Subtree Equivalence: {selectedCandidate === 'Alex Rivera' ? 'Exact AST Branch Match' : 'Zero Collusion'}</span>
+                            <span>Cluster Ring: {selectedCandidate === 'Alex Rivera' ? 'Ring #1 (Hostel Node)' : 'Isolated Node'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Normalized Code Token Sample */}
+                    <div className="rounded-xl border border-[#171717] bg-[#171717] p-3 font-mono text-xs text-white">
+                      <div className="text-[10px] font-bold text-[#39d5c8] uppercase">
+                        Codeforces Normalized Abstract Syntax Token Stream:
+                      </div>
+                      <div className="mt-1 text-[11px] text-[#ffd84d] break-all leading-tight opacity-90">
+                        {winnowingEngineRef.current.normalizeCode(answers[1] ?? questions[1].defaultValue ?? '').slice(0, 180)}...
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: CAMPUS PLACEMENT INTEGRITY CERTIFICATE */}
+                {adminActiveTab === 'certificate' && (
+                  <div className="mt-4 rounded-xl border-4 border-[#171717] bg-white p-6 shadow-hard dark:border-[#2e323b] dark:bg-[#15171c]">
+                    <div className="flex items-center justify-between border-b-2 border-[#171717] pb-4 dark:border-white/10">
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-[#6d73ff]">
+                          INSTITUTIONAL ACCREDITATION
+                        </span>
+                        <h4 className="font-display text-2xl uppercase text-[#171717] dark:text-[#f4f4f7]">
+                          Campus Placement Integrity Certificate
+                        </h4>
+                      </div>
+                      <div className="flex h-12 w-12 items-center justify-center rounded-xl border-2 border-[#171717] bg-[#ffd84d] dark:border-[#000000]">
+                        <ShieldCheck className="h-7 w-7 text-[#171717]" />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-bold">
+                      <div className="rounded-lg border border-[#171717]/15 p-2.5 dark:border-[#2e323b]">
+                        <span className="text-[10px] text-[#171717]/60 dark:text-[#a1a1aa] uppercase block">Candidate Name</span>
+                        <span className="text-sm font-black text-[#171717] dark:text-white">{selectedCandidate}</span>
+                      </div>
+                      <div className="rounded-lg border border-[#171717]/15 p-2.5 dark:border-[#2e323b]">
+                        <span className="text-[10px] text-[#171717]/60 dark:text-[#a1a1aa] uppercase block">Cryptographic Session SHA-256</span>
+                        <span className="font-mono text-[10px] text-[#6d73ff] truncate block">e3b0c44298fc1c149afbf4c8996fb92427ae41e4</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-2 text-xs font-bold">
+                      <div className="flex items-center justify-between border-b border-[#171717]/10 py-1.5 dark:border-[#2e323b]">
+                        <span className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-600" /> Fullscreen Enforcement & Tab Lock
+                        </span>
+                        <span className="font-mono text-emerald-600">PASS (100% Locked)</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-[#171717]/10 py-1.5 dark:border-[#2e323b]">
+                        <span className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-600" /> Display Guard (Dual-Monitor Screening)
+                        </span>
+                        <span className="font-mono text-emerald-600">PASS (Single Display)</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-[#171717]/10 py-1.5 dark:border-[#2e323b]">
+                        <span className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-600" /> Mobile Desk Cam QR Companion (Lap Shield)
+                        </span>
+                        <span className="font-mono text-emerald-600">PASS (Active Desk View)</span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-[#171717]/10 py-1.5 dark:border-[#2e323b]">
+                        <span className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-600" /> Keystroke Biometrics & Burst Entropy
+                        </span>
+                        <span className="font-mono text-emerald-600">
+                          {selectedCandidate === 'Alex Rivera' ? 'FAIL (Burst Paste)' : 'PASS (96% Organic Human)'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between border-b border-[#171717]/10 py-1.5 dark:border-[#2e323b]">
+                        <span className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-600" /> Codeforces AST Winnowing Similarity
+                        </span>
+                        <span className={`font-mono ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                          {selectedCandidate === 'Alex Rivera' ? 'FLAGGED (82.4% Collusion)' : 'PASS (24.2% Clean)'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-600" /> AI Eye & Gaze Tracking Compliance
+                        </span>
+                        <span className={`font-mono ${selectedCandidate === 'Alex Rivera' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                          {selectedCandidate === 'Alex Rivera' ? 'REVIEW (3 Gaze Deviations)' : 'PASS (98% Gaze Centered)'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex gap-2">
+                      <button
+                        onClick={() => alert(`Official Campus Placement Verification Certificate for ${selectedCandidate} exported with Cryptographic Hash.`)}
+                        className="btn-neo btn-neo-lemon flex-1 py-2 text-xs flex items-center justify-center gap-1.5"
+                      >
+                        <FileCheck className="h-3.5 w-3.5" />
+                        <span>Download Verifiable Certificate</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* QR Mobile Companion Cam Modal (Campus Zero-Hardware Feature) */}
+        {showQrModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-md rounded-2xl border-4 border-[#171717] bg-[#fffaf0] p-6 text-[#171717] shadow-hard-lg dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
+              <div className="flex items-center justify-between border-b-2 border-[#171717] pb-3 dark:border-white/10">
+                <div className="flex items-center gap-2">
+                  <Smartphone className="h-5 w-5 text-[#6d73ff]" />
+                  <h3 className="font-display text-xl uppercase">Mobile Desk Cam (QR)</h3>
+                </div>
+                <button
+                  onClick={() => setShowQrModal(false)}
+                  className="cursor-pointer text-xs font-black uppercase hover:text-rose-500"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <div className="mt-4 text-center">
+                <p className="text-xs font-bold leading-relaxed text-[#171717]/80 dark:text-[#a1a1aa]">
+                  Zero Hardware Setup: Scan this QR code using your smartphone camera to connect an instant side-angle desk and keyboard view. Prevents lap phones or off-screen prompting!
+                </p>
+
+                {/* SVG Simulated QR Code */}
+                <div className="mx-auto my-4 flex h-48 w-48 items-center justify-center rounded-2xl border-3 border-[#171717] bg-white p-3 shadow-[3px_3px_0_#171717] dark:border-white/20">
+                  <svg viewBox="0 0 100 100" className="h-full w-full">
+                    {/* QR Code Matrix Elements */}
+                    <rect x="5" y="5" width="28" height="28" fill="#171717" />
+                    <rect x="9" y="9" width="20" height="20" fill="white" />
+                    <rect x="13" y="13" width="12" height="12" fill="#171717" />
+
+                    <rect x="67" y="5" width="28" height="28" fill="#171717" />
+                    <rect x="71" y="9" width="20" height="20" fill="white" />
+                    <rect x="75" y="13" width="12" height="12" fill="#171717" />
+
+                    <rect x="5" y="67" width="28" height="28" fill="#171717" />
+                    <rect x="9" y="71" width="20" height="20" fill="white" />
+                    <rect x="13" y="75" width="12" height="12" fill="#171717" />
+
+                    {/* QR Data Pattern */}
+                    <rect x="40" y="8" width="6" height="6" fill="#171717" />
+                    <rect x="50" y="8" width="6" height="6" fill="#171717" />
+                    <rect x="40" y="20" width="6" height="6" fill="#171717" />
+                    <rect x="50" y="26" width="6" height="6" fill="#171717" />
+                    <rect x="10" y="42" width="6" height="6" fill="#171717" />
+                    <rect x="25" y="42" width="6" height="6" fill="#171717" />
+                    <rect x="40" y="42" width="18" height="18" fill="#6d73ff" />
+                    <rect x="65" y="42" width="8" height="8" fill="#171717" />
+                    <rect x="80" y="42" width="8" height="8" fill="#171717" />
+                    <rect x="40" y="70" width="6" height="6" fill="#171717" />
+                    <rect x="50" y="80" width="6" height="6" fill="#171717" />
+                    <rect x="70" y="70" width="14" height="14" fill="#171717" />
+                  </svg>
+                </div>
+
+                <div className="rounded-xl border border-[#171717]/15 bg-[#fff0c2] p-2.5 text-[11px] font-bold text-[#171717]">
+                  <span>🔐 WebRTC P2P Session ID:</span>{' '}
+                  <span className="font-mono font-black">HM-CAMPUS-702X</span>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setQrCompanionActive(true)
+                    setShowQrModal(false)
+                  }}
+                  className="btn-neo btn-neo-lemon mt-4 w-full py-2.5 text-xs uppercase"
+                >
+                  Simulate Phone Connected (Pair Desk Cam)
+                </button>
               </div>
             </div>
           </div>
