@@ -1843,7 +1843,7 @@ export function HireMeContent() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-5 lg:grid-cols-[290px_minmax(0,1fr)] items-start">
+            <div className="mt-4 grid gap-5 lg:grid-cols-[300px_1fr]">
               {/* Left Column: Candidate List */}
               <div className="space-y-2.5">
                 {[
@@ -1882,10 +1882,10 @@ export function HireMeContent() {
                       setReplayPercentage(100)
                       setIsReplaying(false)
                     }}
-                    className={`cursor-pointer rounded-xl border-2 p-3 text-xs font-bold transition-all ${
+                    className={`cursor-pointer rounded-xl border-2 p-3.5 text-xs font-bold transition-all ${
                       selectedCandidate === c.name
-                        ? 'border-[#171717] bg-white text-[#171717] shadow-[3px_3px_0_#171717] ring-2 ring-[#ffd84d] dark:border-[#ffd84d] dark:bg-[#15171c] dark:text-[#f4f4f7]'
-                        : 'border-[#171717]/20 bg-white/70 hover:bg-white text-[#171717] dark:border-[#2e323b] dark:bg-[#1c1f26]/70 dark:text-[#f4f4f7] dark:hover:bg-[#1c1f26]'
+                        ? 'border-[#171717] bg-[#ffd84d] text-[#171717] shadow-[3px_3px_0_#171717] dark:border-[#ffd84d] dark:bg-[#ffd84d] dark:text-[#171717]'
+                        : 'border-[#171717]/20 bg-[#fffaf0] hover:bg-white text-[#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7] dark:hover:bg-[#252a35]'
                     }`}
                   >
                     <div className="flex items-center justify-between">
@@ -1924,7 +1924,7 @@ export function HireMeContent() {
               </div>
 
               {/* Right Column: Deep-Dive Forensic Panel */}
-              <div className="min-w-0 max-w-full overflow-hidden rounded-xl border-2 border-[#171717] bg-[#fffaf0] p-4 sm:p-5 dark:border-[#2e323b] dark:bg-[#1c1f26]">
+              <div className="rounded-xl border-2 border-[#171717] bg-[#fffaf0] p-4.5 dark:border-[#2e323b] dark:bg-[#1c1f26]">
                 {/* Candidate Summary Header */}
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#171717]/15 pb-3 dark:border-[#2e323b]">
                   <div>
@@ -1967,46 +1967,42 @@ export function HireMeContent() {
                 </div>
 
                 {/* Forensic Tabs: Flight Replay vs AST Winnowing vs Certificate */}
-                <div className="mt-3.5 flex flex-wrap gap-1.5 border-b border-[#171717]/15 pb-2.5 dark:border-[#2e323b]">
+                <div className="mt-3.5 flex flex-wrap gap-1 border-b border-[#171717]/15 pb-2 dark:border-[#2e323b]">
                   {[
-                    { id: 'flight', label: 'Flight Recorder', icon: History },
-                    { id: 'winnowing', label: 'AST Plagiarism Matrix', icon: Code2 },
-                    { id: 'certificate', label: 'Integrity Certificate', icon: FileCheck },
-                  ].map((tabItem) => {
-                    const TabIcon = tabItem.icon
-                    return (
-                      <button
-                        key={tabItem.id}
-                        onClick={() => setAdminActiveTab(tabItem.id as any)}
-                        className={`inline-flex items-center gap-1.5 cursor-pointer rounded-lg px-3 py-1.5 text-xs font-black uppercase transition-all ${
-                          adminActiveTab === tabItem.id
-                            ? 'border border-[#171717] bg-[#171717] text-[#fffaf0] shadow-xs dark:bg-[#ffd84d] dark:text-[#171717]'
-                            : 'text-[#171717]/70 hover:bg-white dark:text-[#a1a1aa] dark:hover:bg-[#252933]'
-                        }`}
-                      >
-                        <TabIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span>{tabItem.label}</span>
-                      </button>
-                    )
-                  })}
+                    { id: 'flight', label: '✈️ Keystroke Flight Recorder', icon: History },
+                    { id: 'winnowing', label: '🧬 Codeforces AST Plagiarism', icon: Code2 },
+                    { id: 'certificate', label: '📜 Campus Certificate', icon: FileCheck },
+                  ].map((tabItem) => (
+                    <button
+                      key={tabItem.id}
+                      onClick={() => setAdminActiveTab(tabItem.id as any)}
+                      className={`cursor-pointer rounded-lg px-3 py-1 text-xs font-black uppercase transition-all ${
+                        adminActiveTab === tabItem.id
+                          ? 'border border-[#171717] bg-[#171717] text-[#fffaf0] shadow-xs dark:bg-[#ffd84d] dark:text-[#171717]'
+                          : 'text-[#171717]/70 hover:bg-white dark:text-[#a1a1aa] dark:hover:bg-[#252933]'
+                      }`}
+                    >
+                      {tabItem.label}
+                    </button>
+                  ))}
                 </div>
 
                 {/* TAB 1: KEYSTROKE FLIGHT RECORDER & REPLAY */}
                 {adminActiveTab === 'flight' && (
-                  <div className="mt-4 space-y-4 min-w-0 max-w-full">
+                  <div className="mt-4 space-y-4">
                     {/* Replay Controls & Scrubber */}
-                    <div className="rounded-xl border-2 border-[#171717] bg-white p-3.5 shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[2px_2px_0_#000000] min-w-0">
-                      <div className="flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="rounded-xl border-2 border-[#171717] bg-white p-3.5 shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[2px_2px_0_#000000]">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => setIsReplaying(!isReplaying)}
                             className="btn-neo btn-neo-lemon flex items-center gap-1.5 py-1 px-3 text-xs"
                           >
                             {isReplaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 fill-current" />}
-                            <span>{isReplaying ? 'Pause' : 'Play Replay'}</span>
+                            <span>{isReplaying ? 'Pause' : 'Play Flight Replay'}</span>
                           </button>
 
-                          <div className="flex items-center gap-0.5 rounded-lg border border-[#171717]/20 p-0.5 text-[10px] font-black dark:border-[#2e323b]">
+                          <div className="flex items-center gap-1 rounded-lg border border-[#171717]/20 p-0.5 text-[10px] font-black dark:border-[#2e323b]">
                             {[1, 2, 5, 10].map((spd) => (
                               <button
                                 key={spd}
@@ -2024,12 +2020,12 @@ export function HireMeContent() {
                         </div>
 
                         <span className="font-mono text-xs font-black text-[#171717] dark:text-[#ffd84d]">
-                          Position: {replayPercentage}%
+                          Playback Position: {replayPercentage}%
                         </span>
                       </div>
 
                       {/* Scrubber slider */}
-                      <div className="mt-3 min-w-0 w-full">
+                      <div className="mt-3">
                         <input
                           type="range"
                           min="0"
@@ -2041,27 +2037,27 @@ export function HireMeContent() {
                           }}
                           className="w-full accent-[#171717] cursor-pointer dark:accent-[#ffd84d]"
                         />
-                        <div className="flex justify-between font-mono text-[9px] text-[#171717]/60 dark:text-[#a1a1aa] mt-1 gap-1">
+                        <div className="flex justify-between font-mono text-[9px] text-[#171717]/60 dark:text-[#a1a1aa] mt-1">
                           <span>00:00 (Start)</span>
-                          <span>04:12 (Draft)</span>
-                          <span>08:45 (Refactor)</span>
-                          <span>10:00 (Submit)</span>
+                          <span>04:12 (Drafting)</span>
+                          <span>08:45 (Refactoring)</span>
+                          <span>10:00 (Submission)</span>
                         </div>
                       </div>
                     </div>
 
-                    {/* Dynamic Reconstructed Code View (Strict Non-Overflow) */}
-                    <div className="rounded-xl border-2 border-[#171717] bg-[#121418] p-3.5 text-white dark:border-[#2e323b] min-w-0 max-w-full overflow-hidden">
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2 text-[10px]">
+                    {/* Dynamic Reconstructed Code View */}
+                    <div className="rounded-xl border-2 border-[#171717] bg-[#171717] p-3.5 text-white dark:border-[#2e323b]">
+                      <div className="flex items-center justify-between border-b border-white/15 pb-2 text-[10px]">
                         <span className="font-mono font-bold text-[#39d5c8] flex items-center gap-1.5">
-                          <Code2 className="h-3.5 w-3.5 shrink-0" /> Replay Snapshot · {replayPercentage}% Timeline
+                          <Code2 className="h-3.5 w-3.5" /> Replay Snapshot at {replayPercentage}% Timeline
                         </span>
-                        <span className="font-mono text-white/60 truncate max-w-full">
-                          {selectedCandidate === 'Alex Rivera' ? '⚠️ Instant 0ms Paste Injection Flagged' : '✓ Organic Human Inter-Keystroke Latency'}
+                        <span className="font-mono text-white/50">
+                          {selectedCandidate === 'Alex Rivera' ? '⚠️ Instant 0ms Paste Injection Detected' : 'Organic Human Inter-Keystroke Latency'}
                         </span>
                       </div>
 
-                      <pre className="mt-3 max-h-56 w-full max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-black/40 p-3 font-mono text-xs text-[#fffaf0] leading-relaxed select-text border border-white/10">
+                      <pre className="mt-3 max-h-56 overflow-auto font-mono text-xs text-[#fffaf0] leading-relaxed select-text">
                         {selectedCandidate === 'Alex Rivera' ? (
                           replayPercentage < 15 ? (
                             '# Drafting...'
@@ -2075,41 +2071,41 @@ export function HireMeContent() {
                       </pre>
                     </div>
 
-                    {/* Telemetry Stats Grid (Clean 4-col responsive) */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 min-w-0">
-                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c] min-w-0">
-                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa] truncate">
-                          Typing Speed
+                    {/* Telemetry Stats Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Typing Velocity
                         </div>
-                        <div className="font-display text-base sm:text-lg text-[#171717] dark:text-[#f4f4f7] truncate">
-                          {selectedCandidate === 'Alex Rivera' ? '184 WPM' : `${flightMetrics?.wpm || 64} WPM`}
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c] min-w-0">
-                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa] truncate">
-                          Backspaces
-                        </div>
-                        <div className="font-display text-base sm:text-lg text-[#171717] dark:text-[#f4f4f7] truncate">
-                          {selectedCandidate === 'Alex Rivera' ? '0 Backspaces' : `${flightMetrics?.backspacesCount || 24} Fixed`}
+                        <div className="font-display text-xl text-[#171717] dark:text-[#f4f4f7]">
+                          {selectedCandidate === 'Alex Rivera' ? '184 WPM (Burst)' : `${flightMetrics?.wpm || 64} WPM`}
                         </div>
                       </div>
 
-                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c] min-w-0">
-                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa] truncate">
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Human Friction
+                        </div>
+                        <div className="font-display text-xl text-[#171717] dark:text-[#f4f4f7]">
+                          {selectedCandidate === 'Alex Rivera' ? '0 Backspaces' : `${flightMetrics?.backspacesCount || 24} Typos Fixed`}
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
                           Paste Injections
                         </div>
-                        <div className={`font-display text-base sm:text-lg truncate ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400 font-bold' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                          {selectedCandidate === 'Alex Rivera' ? '2 Detected' : '0 Clean'}
+                        <div className={`font-display text-xl ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                          {selectedCandidate === 'Alex Rivera' ? '2 Flagged' : '0 Clean'}
                         </div>
                       </div>
 
-                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c] min-w-0">
-                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa] truncate">
-                          Origin Flag
+                      <div className="rounded-xl border border-[#171717] bg-white p-2.5 text-center dark:border-[#2e323b] dark:bg-[#15171c]">
+                        <div className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Cadence Origin
                         </div>
-                        <div className={`font-display text-xs sm:text-sm mt-0.5 uppercase truncate font-black ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                          {selectedCandidate === 'Alex Rivera' ? 'AI Burst' : 'Organic'}
+                        <div className={`font-display text-sm mt-1 uppercase ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                          {selectedCandidate === 'Alex Rivera' ? 'AI INJECTION' : 'ORGANIC HUMAN'}
                         </div>
                       </div>
                     </div>
