@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Activity,
   AlertCircle,
@@ -52,11 +52,95 @@ import { EyeTrackerEngine, GazeDirection, GazeStatus } from '@/lib/proctoring/ey
 
 type HireMeStep = 'profile' | 'invite' | 'check' | 'assessment' | 'admin' | 'results'
 
-const questions = [
+/** Seconds allowed per multiple-choice question. */
+const MCQ_SECONDS = 2 * 60
+
+/**
+ * A question as the assessment UI renders it.
+ *
+ * `timeLimit: 0` means UNTIMED — theory questions have no countdown at all,
+ * per product decision. Only MCQs are on the clock.
+ */
+type AssessmentQuestion = {
+  id: string
+  kind: 'mcq' | 'theory'
+  /** Section label shown in the header and the task list. */
+  type: string
+  timeLimit: number
+  title: string
+  options?: string[]
+  correct?: number
+  placeholder?: string
+  defaultValue?: string
+  /** Where the prompt came from — the RAG backend, or this file. */
+  source: 'rag' | 'fallback'
+}
+
+/** One question as the Python backend serialises it. */
+type BackendQuestion = {
+  id?: string
+  kind?: string
+  prompt?: string
+  options?: string[]
+  correct_index?: number | null
+}
+
+const THEORY_PLACEHOLDER =
+  'Structure your answer: the approach you would take, the trade-offs you weighed, and how you would validate the result.'
+
+/**
+ * Map backend questions onto the UI shape.
+ *
+ * Returns `FALLBACK_QUESTIONS` when nothing usable comes back, so a backend
+ * outage degrades to the seeded demo instead of an empty assessment. MCQs with
+ * fewer than two options are dropped outright — they cannot be answered.
+ */
+function mapBackendQuestions(raw: BackendQuestion[]): AssessmentQuestion[] {
+  const mapped: AssessmentQuestion[] = []
+  raw.forEach((q, i) => {
+    const prompt = (q.prompt ?? '').trim()
+    if (!prompt) return
+
+    if (q.kind === 'theory') {
+      mapped.push({
+        id: q.id ?? `q${i + 1}`,
+        kind: 'theory',
+        type: 'Technical Writing',
+        timeLimit: 0,
+        title: prompt,
+        placeholder: THEORY_PLACEHOLDER,
+        source: 'rag',
+      })
+      return
+    }
+
+    const options = (q.options ?? []).filter((o) => typeof o === 'string' && o.trim().length > 0)
+    if (options.length < 2) return
+
+    mapped.push({
+      id: q.id ?? `q${i + 1}`,
+      kind: 'mcq',
+      type: `Multiple choice ${mapped.filter((m) => m.kind === 'mcq').length + 1}`,
+      timeLimit: MCQ_SECONDS,
+      title: prompt,
+      options,
+      correct: typeof q.correct_index === 'number' ? q.correct_index : undefined,
+      source: 'rag',
+    })
+  })
+  return mapped.length > 0 ? mapped : FALLBACK_QUESTIONS
+}
+
+/**
+ * Seeded demo set. Only shown until the RAG backend serves real questions, or
+ * if it is unreachable.
+ */
+const FALLBACK_QUESTIONS: AssessmentQuestion[] = [
   {
-    id: 1,
+    id: 'fallback-1',
+    kind: 'mcq',
     type: 'MCP Protocol',
-    timeLimit: 2 * 60, // 2 minutes (120 seconds)
+    timeLimit: MCQ_SECONDS,
     title: 'Model Context Protocol (MCP): How does an MCP client securely discover capabilities and execute tools on an MCP server?',
     options: [
       'Client requests available tool schemas via `tools/list`, validates parameters against JSON Schema, and executes via `tools/call` over JSON-RPC',
@@ -65,11 +149,13 @@ const questions = [
       'Client polls plain HTTP REST endpoints without JSON Schema validation, structured error codes, or protocol handshakes',
     ],
     correct: 0,
+    source: 'fallback',
   },
   {
-    id: 2,
+    id: 'fallback-2',
+    kind: 'theory',
     type: 'Technical Writing',
-    timeLimit: 10 * 60, // 10 minutes (600 seconds)
+    timeLimit: 0,
     title: 'Technical Writing: Design and document an MCP Server architecture for an automated cloud incident response and observability platform.',
     placeholder: 'Write a comprehensive technical specification covering:\n1. Architecture & Protocol Transport (stdio / SSE)\n2. Tool Specifications (JSON Schema for log analysis, metric anomaly alerts, canary rollback)\n3. Security & Access Control (principle of least privilege, token authentication, audit logs)\n4. Error Handling, Rate Limiting & Human-In-The-Loop Guards...',
     defaultValue: `# Technical Architecture: MCP Cloud Incident Response Server
@@ -91,6 +177,7 @@ The incident response server acts as an MCP server bridging AI diagnostic agents
 ## 4. Fault Tolerance & Human Escalation
 - Tool executions timeout after 15 seconds.
 - High-severity incidents automatically escalate to on-call engineers if mitigation confidence is under 90%.`,
+    source: 'fallback',
   },
 ]
 
@@ -128,11 +215,10 @@ export function HireMeContent() {
   const [isTerminated, setIsTerminated] = useState(false)
   const [terminationReason, setTerminationReason] = useState('')
 
-  // Per-question countdown timers: Q1 MCP = 2m (120s), Q2 Writing = 10m (600s)
-  const [questionTimes, setQuestionTimes] = useState<Record<number, number>>({
-    0: 2 * 60,
-    1: 10 * 60,
-  })
+  // Per-question countdown timers. MCQs get MCQ_SECONDS; theory is untimed.
+  const [questionTimes, setQuestionTimes] = useState<Record<number, number>>(
+    () => Object.fromEntries(FALLBACK_QUESTIONS.map((q, i) => [i, q.timeLimit])),
+  )
 
   // Codeforces Anti-Cheat & Flight Recorder state
   const flightRecorderRef = useRef<KeystrokeFlightRecorder>(new KeystrokeFlightRecorder())
@@ -508,17 +594,14 @@ export function HireMeContent() {
     }
 
     // Pre-seed initial keystroke timeline so flight recorder has telemetry baseline
-    const starterText = questions[1].defaultValue || ''
+    const starterText = theoryText || ''
     const chunk = 14
     for (let i = 0; i < Math.min(starterText.length, 280); i += chunk) {
       flightRecorderRef.current.logKeystroke('insert', starterText.slice(i, i + chunk), i, i + chunk)
     }
     setFlightMetrics(flightRecorderRef.current.computeMetrics())
 
-    setQuestionTimes({
-      0: 2 * 60,
-      1: 10 * 60,
-    })
+    setQuestionTimes(Object.fromEntries(activeQuestions.map((q, i) => [i, q.timeLimit])))
     setCurrentQuestion(0)
     setStep('assessment')
   }
@@ -665,10 +748,138 @@ export function HireMeContent() {
   const [answers, setAnswers] = useState<Record<number, any>>({ 0: 0 })
   const [isPaused, setIsPaused] = useState(false)
 
+  // Questions served by the RAG backend. Starts as the seeded demo set and is
+  // replaced in place once generation finishes, so a slow or unreachable
+  // backend never leaves the candidate staring at an empty assessment.
+  const [activeQuestions, setActiveQuestions] = useState<AssessmentQuestion[]>(FALLBACK_QUESTIONS)
+  const [ragStatus, setRagStatus] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
+  const [ragNote, setRagNote] = useState('')
+  const [ragStart, setRagStart] = useState(false)
+  const ragSessionIdRef = useRef<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // The theory question is not necessarily last nor at index 1 — with backend
+  // questions the MCQ count varies, so resolve it by kind instead of position.
+  const theoryIndex = activeQuestions.findIndex((q) => q.kind === 'theory')
+  const theoryText =
+    theoryIndex >= 0
+      ? String(answers[theoryIndex] ?? activeQuestions[theoryIndex]?.defaultValue ?? '')
+      : ''
+
+  // Submits to the backend for grading. Best-effort: the proctored UI must
+  // never block on it, and the results screen is already rendered locally.
+  const submitToBackend = useCallback(async () => {
+    const sessionId = ragSessionIdRef.current
+    if (!sessionId) return
+    try {
+      const payload = activeQuestions.map((q, i) => {
+        const a = answers[i]
+        return q.kind === 'mcq'
+          ? { question_id: q.id, selected_index: typeof a === 'number' ? a : null, text: '' }
+          : { question_id: q.id, selected_index: null, text: String(a ?? '') }
+      })
+      await fetch('/api/onboarding/answers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, answers: payload }),
+      })
+    } catch {
+      /* grading is best-effort */
+    }
+  }, [activeQuestions, answers])
+
+  const finishAssessment = useCallback(() => {
+    void submitToBackend()
+    setStep('results')
+  }, [submitToBackend])
+
+  // Start generation early — during the invite/check steps — so the pipeline
+  // (GitHub extraction + question generation) overlaps with hardware setup.
+  useEffect(() => {
+    if (step === 'invite' || step === 'check' || step === 'assessment') setRagStart(true)
+  }, [step])
+
+  useEffect(() => {
+    if (!ragStart) return
+    let cancelled = false
+
+    const stopPolling = () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+
+    const apply = (data: any) => {
+      if (cancelled) return false
+      if (!Array.isArray(data?.questions) || data.questions.length === 0) return false
+      setActiveQuestions(mapBackendQuestions(data.questions))
+      setRagStatus('ready')
+      stopPolling()
+      return true
+    }
+
+    const fail = (note: string) => {
+      if (cancelled) return
+      setRagStatus('failed')
+      setRagNote(note)
+    }
+
+    ;(async () => {
+      setRagStatus('loading')
+      try {
+        const res = await fetch('/api/onboarding', { method: 'POST' })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          fail(
+            data?.missing
+              ? `${data.message} Missing: ${data.missing.join(', ')}.`
+              : data?.message ?? data?.error ?? 'Could not start question generation.',
+          )
+          return
+        }
+        ragSessionIdRef.current = data?.id ?? null
+        if (apply(data)) return
+        if (!ragSessionIdRef.current) {
+          fail('Backend did not return a session id.')
+          return
+        }
+        pollRef.current = setInterval(async () => {
+          try {
+            const pr = await fetch(
+              `/api/onboarding?id=${encodeURIComponent(ragSessionIdRef.current as string)}`,
+            )
+            const pd = await pr.json().catch(() => ({}))
+            if (apply(pd)) return
+            if (pd?.status === 'failed') {
+              stopPolling()
+              fail(pd?.error ?? 'Question generation failed.')
+            }
+          } catch {
+            /* transient; keep polling */
+          }
+        }, 2000)
+      } catch {
+        fail('Could not reach the onboarding API.')
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      stopPolling()
+    }
+  }, [ragStart])
+
+  // Re-seed the countdowns and index whenever the question set is swapped in.
+  useEffect(() => {
+    setQuestionTimes(Object.fromEntries(activeQuestions.map((q, i) => [i, q.timeLimit])))
+    setCurrentQuestion(0)
+  }, [activeQuestions])
+
   // Run Codeforces AST Winnowing Plagiarism evaluation whenever entering admin or results
   useEffect(() => {
     if (step === 'admin' || step === 'results') {
-      const text = answers[1] ?? questions[1].defaultValue ?? ''
+      const text = answers[1] ?? activeQuestions[1].defaultValue ?? ''
       const vsChatGPT = winnowingEngineRef.current.compareSubmissions(
         text,
         LLM_BENCHMARK_SOLUTIONS.chatgpt_mcp_response,
@@ -828,23 +1039,23 @@ export function HireMeContent() {
     fetchUser()
   }, [])
 
-  // Per-question countdown timer loop
+  // Per-question countdown timer loop. Untimed questions (theory) run no clock
+  // at all, so their expiry can never auto-submit the assessment.
   useEffect(() => {
     if (step !== 'assessment' || isPaused || isTerminated) return
+    const limit = activeQuestions[currentQuestion]?.timeLimit ?? 0
+    if (limit <= 0) return
 
     const interval = setInterval(() => {
       setQuestionTimes((prev) => {
         const currentSecs = prev[currentQuestion] ?? 0
         if (currentSecs <= 1) {
-          if (currentQuestion < questions.length - 1) {
-            // Auto advance from Q1 (MCP) to Q2 (Writing)
+          if (currentQuestion < activeQuestions.length - 1) {
             setCurrentQuestion((curr) => curr + 1)
-            return { ...prev, [currentQuestion]: 0 }
           } else {
-            // Auto submit to results when Q2 timer finishes
-            setStep('results')
-            return { ...prev, [currentQuestion]: 0 }
+            finishAssessment()
           }
+          return { ...prev, [currentQuestion]: 0 }
         }
         return {
           ...prev,
@@ -854,7 +1065,7 @@ export function HireMeContent() {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [step, isPaused, isTerminated, currentQuestion])
+  }, [step, isPaused, isTerminated, currentQuestion, activeQuestions, finishAssessment])
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -1548,7 +1759,7 @@ export function HireMeContent() {
                   0{currentQuestion + 1}
                 </span>
                 <span className="text-xs font-black uppercase text-[#171717] dark:text-[#f4f4f7]">
-                  Question {currentQuestion + 1} of {questions.length} · {questions[currentQuestion].type}
+                  Question {currentQuestion + 1} of {activeQuestions.length} · {activeQuestions[currentQuestion].type}
                 </span>
                 {tabViolations === 1 && (
                   <span className="flex items-center gap-1 rounded bg-rose-500 px-2 py-0.5 text-[9px] font-black uppercase text-white animate-pulse">
@@ -1588,7 +1799,7 @@ export function HireMeContent() {
                   Assessment Tasks
                 </div>
                 <div className="space-y-1.5">
-                  {questions.map((q, idx) => (
+                  {activeQuestions.map((q, idx) => (
                     <button
                       key={q.id}
                       onClick={() => setCurrentQuestion(idx)}
@@ -1700,13 +1911,13 @@ export function HireMeContent() {
                 ) : (
                   <div>
                     <h2 className="text-base font-black text-[#171717] sm:text-lg dark:text-[#f4f4f7]">
-                      {questions[currentQuestion].title}
+                      {activeQuestions[currentQuestion].title}
                     </h2>
 
                     <div className="mt-4">
-                      {questions[currentQuestion].options ? (
+                      {activeQuestions[currentQuestion].options ? (
                         <div className="space-y-2">
-                          {questions[currentQuestion].options.map((opt, optIdx) => (
+                          {activeQuestions[currentQuestion].options.map((opt, optIdx) => (
                             <button
                               key={opt}
                               onClick={() =>
@@ -1728,8 +1939,8 @@ export function HireMeContent() {
                       ) : (
                         <textarea
                           rows={12}
-                          value={answers[currentQuestion] ?? questions[currentQuestion].defaultValue}
-                          placeholder={questions[currentQuestion].placeholder}
+                          value={answers[currentQuestion] ?? activeQuestions[currentQuestion].defaultValue}
+                          placeholder={activeQuestions[currentQuestion].placeholder}
                           onKeyDown={(e) => {
                             if (e.key === 'Backspace' || e.key === 'Delete') {
                               flightRecorderRef.current.logKeystroke('delete', '', e.currentTarget.selectionStart, e.currentTarget.value.length)
@@ -1754,7 +1965,7 @@ export function HireMeContent() {
                           }}
                           onChange={(e) => {
                             const newVal = e.target.value
-                            const oldVal = answers[currentQuestion] ?? questions[currentQuestion].defaultValue ?? ''
+                            const oldVal = answers[currentQuestion] ?? activeQuestions[currentQuestion].defaultValue ?? ''
                             setAnswers({ ...answers, [currentQuestion]: newVal })
 
                             const diff = newVal.length - oldVal.length
@@ -1777,7 +1988,7 @@ export function HireMeContent() {
                         <ArrowLeft className="h-3 w-3" /> Previous
                       </button>
 
-                      {currentQuestion < questions.length - 1 ? (
+                      {currentQuestion < activeQuestions.length - 1 ? (
                         <button
                           onClick={() => setCurrentQuestion(currentQuestion + 1)}
                           className="btn-neo btn-neo-aqua py-1.5 text-xs"
@@ -2602,7 +2813,7 @@ export function HireMeContent() {
                           )
                         ) : (
                           flightRecorderRef.current.replayAtPercentage(replayPercentage).text ||
-                          (answers[1] ?? questions[1].defaultValue ?? '')
+                          (answers[1] ?? activeQuestions[1].defaultValue ?? '')
                         )}
                       </pre>
                     </div>
@@ -2776,7 +2987,7 @@ export function HireMeContent() {
                         Codeforces Normalized Abstract Syntax Token Stream:
                       </div>
                       <div className="mt-1 text-[11px] text-[#ffd84d] break-all leading-tight opacity-90">
-                        {winnowingEngineRef.current.normalizeCode(answers[1] ?? questions[1].defaultValue ?? '').slice(0, 180)}...
+                        {winnowingEngineRef.current.normalizeCode(answers[1] ?? activeQuestions[1].defaultValue ?? '').slice(0, 180)}...
                       </div>
                     </div>
                   </div>

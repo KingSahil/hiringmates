@@ -177,6 +177,39 @@ export function AssessmentContent() {
     }
   }
 
+  // Adopt the session that auto-onboarding started on first sign-in, or one a
+  // previous visit left in flight. Idempotent: the endpoint only starts a
+  // pipeline for accounts that have never been registered, so mounting or
+  // refreshing here can never duplicate a run.
+  useEffect(() => {
+    if (!signedIn || session) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/onboarding/auto', { method: 'POST' })
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled || !data?.sessionId) return
+
+        // Resume only work that is still open. A finished session is already
+        // surfaced by the saved profile above; adopting it here would cover
+        // that view with a stale run.
+        const resumable =
+          data.status === 'new' ||
+          ['pending', 'awaiting'].includes(data.sessionStatus)
+        if (!resumable) return
+
+        if (data.session) setSession(data.session)
+        poll(data.sessionId)
+      } catch {
+        // Fall back to the manual start view.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [signedIn, session, poll])
+
   const submitIntake = async (answers: Record<string, string>) => {
     setIntakeDone(true)
     if (!session) return

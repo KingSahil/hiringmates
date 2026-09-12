@@ -67,9 +67,20 @@ class TestProviderSelection:
         """
         Either the SDK is absent or the key is empty; both must surface as a
         clear LLMError rather than an import crash or a silent misconfiguration.
+
+        The active provider's key is blanked explicitly, for the same reason
+        `TestConfigValidation` does it: `Settings` reads from backend/.env, so
+        without this the openai case silently succeeds on any machine that has
+        both the SDK installed and a real key configured — which is exactly the
+        misconfiguration this test exists to catch.
         """
+        blanked = {
+            "gemini": {"gemini_api_key": ""},
+            "openai": {"openai_api_key": ""},
+            "anthropic": {"anthropic_api_key": ""},
+        }[provider]
         with pytest.raises(LLMError):
-            build_llm(Settings(llm_provider=provider))
+            build_llm(Settings(llm_provider=provider, **blanked))
 
 
 class TestConfigValidation:

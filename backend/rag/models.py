@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SessionStatus = Literal[
     "pending",       # created, extraction not started
@@ -26,6 +26,27 @@ SessionStatus = Literal[
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:20]}"
+
+
+def _as_str_list(value: Any) -> list[str]:
+    """
+    Coerce whatever the model returned into a list of strings.
+
+    `evidence` is presentational — it is displayed, never computed on. Models
+    asked for a list sometimes return a dict of stats instead (observed with an
+    OpenAI-compatible proxy), and rejecting that fails the entire profile over
+    a field that carries no meaning downstream. That is the same reasoning that
+    keeps rubric scores as floats, so normalise rather than raise.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [f"{key}: {val}" for key, val in value.items()]
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return [str(value)]
 
 
 def utcnow() -> datetime:
@@ -79,6 +100,11 @@ class RoughProfile(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def _evidence_as_list(cls, v: Any) -> list[str]:
+        return _as_str_list(v)
 
 
 class Question(BaseModel):
@@ -196,6 +222,11 @@ class SkillTag(BaseModel):
     name: str
     confidence: str = "medium"
     evidence: list[str] = Field(default_factory=list)
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def _evidence_as_list(cls, v: Any) -> list[str]:
+        return _as_str_list(v)
 
 
 class EnhancedProfile(BaseModel):
