@@ -191,6 +191,9 @@
 .landing-choices:has(.choice-hire:hover) .choice-mates, .landing-choices:has(.choice-mates:hover) .choice-hire { flex-grow: .82; filter: saturate(.55) brightness(.92); }
   .choice-hire { background: #111111; color: #ffffff; }
 .choice-mates { background: #f2c94c; color: #111111; }
+.choice-mates p,
+.choice-mates .choice-number,
+.choice-mates > div > div { color: #151515; }
 .choice-number { font-family: var(--font-geist-mono), monospace; font-size: .75rem; letter-spacing: .2em; color: currentColor; opacity: .72; }
 .choice-mates .choice-number { color: #111111; }
 .choice-arrow { align-self: flex-end; font-family: var(--font-geist-mono), monospace; font-size: 2.5rem; line-height: 1; transition: transform .3s ease; }
