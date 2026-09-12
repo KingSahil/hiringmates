@@ -200,6 +200,8 @@
 .choice-panel:hover .choice-arrow { transform: translateX(.5rem); }
 .landing-footer { border-top: 3px solid #4d3b2b; margin-top: 1rem; padding-top: 1rem; color: #685744; font-size: .65rem; letter-spacing: .16em; }
 @media (max-width: 700px) { .landing-shell { padding: 1rem; } .landing-choices { grid-template-columns: 1fr; } .choice-panel { min-height: 270px; } }
+.room-actions[data-create-open="true"] > div:last-child > input,
+.room-actions[data-create-open="true"] > div:last-child > button:nth-child(2) { display: none; }
 
 /* Retro arcade system: shared across every workspace view. */
 :root {
