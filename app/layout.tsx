@@ -1,19 +1,67 @@
-import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
+import { Bebas_Neue, Inter } from 'next/font/google'
 import './globals.css'
+import { Navbar } from '@/components/Navbar'
+import { NavigationProvider } from '@/lib/navigation'
+import { ThemeProvider } from '@/lib/theme'
+
+const bebas = Bebas_Neue({
+  weight: '400',
+  subsets: ['latin'],
+  variable: '--font-bebas',
+  display: 'swap',
+})
+
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+  display: 'swap',
+})
 
 export const metadata: Metadata = {
-  title: 'hireme.app · Build alone. Build together.',
-  description: 'A focused home for proving what you can do and finding the people you want to build with.',
-  generator: 'v0.app',
+  title: 'HiringMates · Prove your craft. Build with your crew.',
+  description: 'High-signal developer assessments and live multiplayer coding arcade with Realtime collaboration.',
 }
 
 export const viewport: Viewport = {
-  colorScheme: 'light',
-  themeColor: '#f4ead0',
-  userScalable: false,
+  colorScheme: 'light dark',
+  themeColor: '#fffaf0',
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" className="bg-[#f4ead0]"><body className="antialiased">{children}{process.env.NODE_ENV === 'production' && <Analytics />}</body></html>
+  return (
+    <html
+      lang="en"
+      suppressHydrationWarning
+      data-scroll-behavior="smooth"
+      className={`${bebas.variable} ${inter.variable} bg-[#fffaf0] text-[#171717] dark:bg-[#0c0d11] dark:text-[#f4f4f7]`}
+    >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var t = localStorage.getItem('theme');
+                  if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                    document.documentElement.classList.add('dark');
+                  } else {
+                    document.documentElement.classList.remove('dark');
+                  }
+                } catch(e) {}
+              })();
+            `,
+          }}
+        />
+      </head>
+      <body className="min-h-screen bg-[#fffaf0] text-[#171717] antialiased dark:bg-[#0c0d11] dark:text-[#f4f4f7]">
+        <ThemeProvider>
+          <NavigationProvider>
+            <Navbar />
+            {children}
+          </NavigationProvider>
+        </ThemeProvider>
+      </body>
+    </html>
+  )
 }
