@@ -31,8 +31,9 @@ from pydantic import BaseModel
 
 from rag.config import load_settings
 from rag.llm import LLMClient, build_llm
-from rag.models import Answer, Identity
+from rag.models import Answer, Identity, PlagiarismCheckRequest
 from rag.pipeline import Pipeline, SubprocessDetector
+from rag.plagiarism import CopyDetectEngine
 from rag.scenarios import DEFAULT_SCENARIO, list_scenarios
 from rag.store import MemoryStore, Store, SupabaseStore
 
@@ -141,6 +142,14 @@ def get_profile(user_id: str) -> dict:
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
     return profile.model_dump(mode="json")
+
+
+@app.post("/plagiarism/check")
+def check_plagiarism(request: PlagiarismCheckRequest) -> dict:
+    pipeline = _pipeline()
+    engine = CopyDetectEngine()
+    result = engine.analyze(request, llm=pipeline.llm if request.run_llm else None)
+    return result.model_dump(mode="json")
 
 
 def _advance_safely(pipeline: Pipeline, session_id: str) -> None:

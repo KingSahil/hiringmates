@@ -12,6 +12,13 @@
 // 1. CODEFORCES AST & WINNOWING PLAGIARISM
 // ==========================================
 
+export interface AICommentFlagClient {
+  lineNumber?: number
+  lineContent: string
+  flagType: 'emoji' | 'ai_phrase' | 'boilerplate'
+  detail: string
+}
+
 export interface PlagiarismResult {
   similarityScore: number // 0 to 100
   matchedFingerprints: number
@@ -20,7 +27,25 @@ export interface PlagiarismResult {
   clusterMatchWith: string
   normalizedTokenSample: string
   confidence: 'HIGH' | 'SUSPICIOUS' | 'CLEAN'
+  confidenceScore: number // 0 to 100% confidence
+  verdict: 'CLEAN' | 'SUSPICIOUS' | 'PLAGIARIZED' | 'AI_GENERATED'
+  isAIGenerated: boolean
+  detectedEmojis: string[]
+  flaggedComments: AICommentFlagClient[]
+  llmExplanation?: string
 }
+
+// Regex matching unicode emojis across symbols, pictographs, dingbats, and emoticons
+const EMOJI_REGEX = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/gu
+
+const AI_PHRASES: Array<{ pattern: RegExp; desc: string }> = [
+  { pattern: /^\s*(?:\/\/|#|\*)\s*(?:step\s*\d+|phase\s*\d+):/i, desc: 'Step-by-step robotic commentary' },
+  { pattern: /^\s*(?:\/\/|#|\*)\s*helper\s+function\s+to/i, desc: 'Formulaic helper docstring' },
+  { pattern: /^\s*(?:\/\/|#|\*)\s*(?:time|space)\s+complexity\s*:/i, desc: 'Textbook complexity annotation' },
+  { pattern: /^\s*(?:\/\/|#|\*)\s*note:\s*(?:ensure|remember|this\s+guarantees)/i, desc: 'Instructional advisory comment' },
+  { pattern: /```(?:javascript|typescript|python|js|ts)?/i, desc: 'Markdown code block residue' },
+  { pattern: /here(?:\s+is|\s+'s)\s+(?:the\s+)?(?:code|solution|implementation)/i, desc: 'LLM response header residue' },
+]
 
 export class CodeforcesWinnowingEngine {
   private k: number
@@ -33,6 +58,60 @@ export class CodeforcesWinnowingEngine {
     this.windowSize = windowSize
     this.prime = 31
     this.mod = 1000000007
+  }
+
+  /**
+   * Scans code for AI hallmarks: emojis in comments/strings and formulaic AI comments
+   */
+  public detectAICodeMarkers(source: string): {
+    emojis: string[]
+    flags: AICommentFlagClient[]
+    aiScore: number
+  } {
+    if (!source) return { emojis: [], flags: [], aiScore: 0 }
+
+    const emojis: string[] = []
+    const flags: AICommentFlagClient[] = []
+    const lines = source.split('\n')
+
+    lines.forEach((line, idx) => {
+      const lineNum = idx + 1
+      const foundEmojis = line.match(EMOJI_REGEX)
+      if (foundEmojis && foundEmojis.length > 0) {
+        foundEmojis.forEach((em) => {
+          if (!emojis.includes(em)) emojis.push(em)
+        })
+        flags.push({
+          lineNumber: lineNum,
+          lineContent: line.trim(),
+          flagType: 'emoji',
+          detail: `Contains AI-characteristic emoji: ${foundEmojis.join(' ')}`,
+        })
+      }
+
+      for (const phrase of AI_PHRASES) {
+        if (phrase.pattern.test(line)) {
+          flags.push({
+            lineNumber: lineNum,
+            lineContent: line.trim(),
+            flagType: 'ai_phrase',
+            detail: phrase.desc,
+          })
+          break
+        }
+      }
+    })
+
+    let aiPoints = 0
+    if (emojis.length > 0) aiPoints += Math.min(50, emojis.length * 25)
+    const phraseFlags = flags.filter((f) => f.flagType === 'ai_phrase')
+    if (phraseFlags.length > 0) aiPoints += Math.min(45, phraseFlags.length * 15)
+
+    return {
+      emojis,
+      flags,
+      aiScore: Math.min(99, aiPoints),
+    }
   }
 
   /**
@@ -129,7 +208,7 @@ export class CodeforcesWinnowingEngine {
     const fingerprints = new Set<number>()
 
     if (normalized.length < this.k) {
-      fingerprints.add(this.hashKgram(normalized))
+      if (normalized.length > 0) fingerprints.add(this.hashKgram(normalized))
       return fingerprints
     }
 
@@ -176,10 +255,12 @@ export class CodeforcesWinnowingEngine {
     targetCode: string,
     targetName = 'Target'
   ): PlagiarismResult {
+    const { emojis, flags, aiScore } = this.detectAICodeMarkers(candidateCode)
     const fp1 = this.generateFingerprints(candidateCode)
     const fp2 = this.generateFingerprints(targetCode)
 
     if (fp1.size === 0 || fp2.size === 0) {
+      const isAI = aiScore >= 45 || emojis.length > 0
       return {
         similarityScore: 0,
         matchedFingerprints: 0,
@@ -187,7 +268,15 @@ export class CodeforcesWinnowingEngine {
         isPlagiarized: false,
         clusterMatchWith: targetName,
         normalizedTokenSample: this.normalizeCode(candidateCode).slice(0, 50),
-        confidence: 'CLEAN',
+        confidence: isAI ? 'SUSPICIOUS' : 'CLEAN',
+        confidenceScore: isAI ? aiScore : 95,
+        verdict: isAI ? 'AI_GENERATED' : 'CLEAN',
+        isAIGenerated: isAI,
+        detectedEmojis: emojis,
+        flaggedComments: flags,
+        llmExplanation: isAI
+          ? `Code contains ${emojis.length} AI-associated emojis (${emojis.join(' ')}) and ${flags.length} robotic comment patterns.`
+          : 'Clean, organic code structure verified.',
       }
     }
 
@@ -201,21 +290,52 @@ export class CodeforcesWinnowingEngine {
     const jaccard = unionCount > 0 ? (intersectionCount / unionCount) * 100 : 0
     const rounded = Math.round(jaccard * 10) / 10
 
+    const isPlagiarized = rounded >= 65
+    const isAI = aiScore >= 45 || emojis.length > 0
+
     let confidence: 'HIGH' | 'SUSPICIOUS' | 'CLEAN' = 'CLEAN'
-    if (rounded >= 70) confidence = 'HIGH'
-    else if (rounded >= 40) confidence = 'SUSPICIOUS'
+    let verdict: 'CLEAN' | 'SUSPICIOUS' | 'PLAGIARIZED' | 'AI_GENERATED' = 'CLEAN'
+    let confidenceScore = Math.max(rounded, aiScore)
+
+    if (isPlagiarized) {
+      confidence = 'HIGH'
+      verdict = 'PLAGIARIZED'
+      confidenceScore = Math.max(confidenceScore, rounded)
+    } else if (isAI) {
+      confidence = 'HIGH'
+      verdict = 'AI_GENERATED'
+      confidenceScore = Math.max(confidenceScore, aiScore)
+    } else if (rounded >= 35 || aiScore >= 25) {
+      confidence = 'SUSPICIOUS'
+      verdict = 'SUSPICIOUS'
+    } else {
+      confidenceScore = Math.max(90, 100 - rounded)
+    }
+
+    const reasons: string[] = []
+    if (emojis.length > 0) reasons.push(`Contains AI emojis: ${emojis.join(' ')}`)
+    if (flags.some((f) => f.flagType === 'ai_phrase')) reasons.push('Contains robotic step commentary.')
+    if (rounded >= 50) reasons.push(`${rounded}% token overlap with ${targetName}.`)
 
     return {
       similarityScore: rounded,
       matchedFingerprints: intersectionCount,
       totalFingerprints: unionCount,
-      isPlagiarized: rounded >= 70,
+      isPlagiarized,
       clusterMatchWith: targetName,
       normalizedTokenSample: this.normalizeCode(candidateCode).slice(0, 50),
       confidence,
+      confidenceScore: Math.min(99, Math.round(confidenceScore)),
+      verdict,
+      isAIGenerated: isAI,
+      detectedEmojis: emojis,
+      flaggedComments: flags,
+      llmExplanation: reasons.length > 0 ? reasons.join(' ') : 'Distinct structural logic verified against comparison baseline.',
     }
   }
 }
+
+export const CopyDetectEngine = CodeforcesWinnowingEngine
 
 // ==========================================
 // 2. KEYSTROKE DYNAMICS & FLIGHT RECORDER
@@ -406,6 +526,7 @@ export interface SecurityViolation {
     | 'TAB_SWITCH'
     | 'PASTE_BLOCKED'
     | 'VOICE_DETECTED'
+    | 'HARDWARE_ANOMALY'
   detail: string
   severity: 'CRITICAL' | 'WARNING' | 'HIGH'
 }

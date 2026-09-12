@@ -150,6 +150,8 @@ export function HireMeContent() {
   const [isReplaying, setIsReplaying] = useState(false)
   const [replaySpeed, setReplaySpeed] = useState<number>(1)
   const [plagiarismMatrix, setPlagiarismMatrix] = useState<Record<string, PlagiarismResult>>({})
+  const [isAuditingPlagiarism, setIsAuditingPlagiarism] = useState(false)
+  const [plagiarismLLMReport, setPlagiarismLLMReport] = useState<string>('')
 
   // Eye & Gaze Tracking State (Looking Down, Left, Right, Away, Tilt, Multiple Faces, Foreign Object)
   const eyeTrackerRef = useRef<EyeTrackerEngine | null>(null)
@@ -688,6 +690,44 @@ export function HireMeContent() {
         peer: vsPeer,
       })
       setFlightMetrics(flightRecorderRef.current.computeMetrics())
+
+      // Query deep backend LLM forensics
+      setIsAuditingPlagiarism(true)
+      fetch('/api/plagiarism/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: text,
+          language: 'markdown',
+          referenceCode: LLM_BENCHMARK_SOLUTIONS.chatgpt_mcp_response,
+          referenceName: 'ChatGPT-4o Baseline',
+          runLLM: true,
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data) {
+            if (data.llmExplanation) {
+              setPlagiarismLLMReport(data.llmExplanation)
+            }
+            if (data.confidenceScore !== undefined) {
+              setPlagiarismMatrix((prev) => ({
+                ...prev,
+                chatgpt: {
+                  ...prev.chatgpt,
+                  confidenceScore: data.confidenceScore,
+                  verdict: data.verdict ?? prev.chatgpt?.verdict,
+                  isAIGenerated: data.isAIGenerated ?? prev.chatgpt?.isAIGenerated,
+                  detectedEmojis: data.detectedEmojis ?? prev.chatgpt?.detectedEmojis,
+                  flaggedComments: data.flaggedComments ?? prev.chatgpt?.flaggedComments,
+                  llmExplanation: data.llmExplanation ?? prev.chatgpt?.llmExplanation,
+                },
+              }))
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => setIsAuditingPlagiarism(false))
     }
   }, [step, answers])
 
@@ -2158,6 +2198,128 @@ export function HireMeContent() {
                   </div>
                 </div>
 
+                {/* AI-Code, Emojis & Plagiarism Confidence Audit Card */}
+                <div className="mt-5 rounded-xl border-2 border-[#171717] bg-[#fffaf0] p-4 text-left shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:shadow-[2px_2px_0_#000000]">
+                  <div className="flex items-center justify-between border-b border-[#171717]/10 pb-2.5 dark:border-white/10">
+                    <div className="flex items-center gap-2">
+                      {plagiarismMatrix.chatgpt?.isAIGenerated || plagiarismMatrix.chatgpt?.isPlagiarized ? (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#171717] bg-[#ff6b6b] text-white">
+                          <ShieldAlert className="h-4 w-4" />
+                        </div>
+                      ) : (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#171717] bg-[#6ee56b] text-[#171717]">
+                          <ShieldCheck className="h-4 w-4" />
+                        </div>
+                      )}
+                      <div>
+                        <h4 className="font-display text-sm uppercase text-[#171717] dark:text-[#f4f4f7]">
+                          AI-Code & Plagiarism Forensic Scorecard
+                        </h4>
+                        <span className="text-[9px] font-bold text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Open-source Copydetect Winnowing + Backend LLM Confidence
+                        </span>
+                      </div>
+                    </div>
+
+                    {isAuditingPlagiarism ? (
+                      <span className="rounded-md border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[9px] font-black uppercase text-[#171717] animate-pulse">
+                        LLM Auditing...
+                      </span>
+                    ) : (
+                      <span
+                        className={`rounded-md border border-[#171717] px-2 py-0.5 text-[9px] font-black uppercase ${
+                          plagiarismMatrix.chatgpt?.isAIGenerated || plagiarismMatrix.chatgpt?.isPlagiarized
+                            ? 'bg-[#ff6b6b] text-white'
+                            : 'bg-[#6ee56b] text-[#171717]'
+                        }`}
+                      >
+                        {plagiarismMatrix.chatgpt?.confidenceScore ?? 96}%{' '}
+                        {plagiarismMatrix.chatgpt?.isAIGenerated
+                          ? 'AI Generated'
+                          : plagiarismMatrix.chatgpt?.isPlagiarized
+                          ? 'Plagiarized'
+                          : 'Human Original'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Confidence Progress */}
+                  <div className="mt-3">
+                    <div className="flex justify-between text-[10px] font-mono font-bold text-[#171717]/70 dark:text-[#a1a1aa] mb-1">
+                      <span>Forensic Confidence:</span>
+                      <span className="font-black text-[#171717] dark:text-[#f4f4f7]">
+                        {plagiarismMatrix.chatgpt?.confidenceScore ?? 96}%
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-500 ${
+                          plagiarismMatrix.chatgpt?.isAIGenerated || plagiarismMatrix.chatgpt?.isPlagiarized
+                            ? 'bg-rose-500'
+                            : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${Math.min(100, plagiarismMatrix.chatgpt?.confidenceScore ?? 96)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Detected Emojis in candidate answers */}
+                  {plagiarismMatrix.chatgpt?.detectedEmojis && plagiarismMatrix.chatgpt.detectedEmojis.length > 0 ? (
+                    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs dark:border-amber-900/40 dark:bg-amber-950/20">
+                      <div className="flex items-center gap-1.5 font-black text-amber-900 dark:text-amber-300">
+                        <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                        <span>AI-Style Emojis Flagged in Submission:</span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {plagiarismMatrix.chatgpt.detectedEmojis.map((em, idx) => (
+                          <span
+                            key={idx}
+                            className="rounded border border-amber-400 bg-white px-1.5 py-0.5 font-mono text-xs dark:bg-slate-900"
+                          >
+                            {em}
+                          </span>
+                        ))}
+                      </div>
+                      <span className="mt-1 block text-[10px] text-amber-800/80 dark:text-amber-300/80">
+                        LLMs inject decorative emojis into comments & specs (e.g. 🚀, ✨, 💡).
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-2.5 flex items-center justify-between text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                      <span className="flex items-center gap-1">
+                        <Check className="h-3 w-3" /> No AI emoji or template markers detected
+                      </span>
+                      <span className="font-mono text-[10px]">Clean Code</span>
+                    </div>
+                  )}
+
+                  {/* Flagged AI comments */}
+                  {plagiarismMatrix.chatgpt?.flaggedComments && plagiarismMatrix.chatgpt.flaggedComments.length > 0 && (
+                    <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50/70 p-2 text-xs dark:border-rose-900/30 dark:bg-rose-950/20">
+                      <span className="text-[10px] font-black uppercase text-rose-800 dark:text-rose-300 block mb-0.5">
+                        Suspicious AI Phrasing ({plagiarismMatrix.chatgpt.flaggedComments.length} occurrences):
+                      </span>
+                      {plagiarismMatrix.chatgpt.flaggedComments.slice(0, 2).map((fl, i) => (
+                        <div key={i} className="text-[10px] font-mono text-rose-700 dark:text-rose-400 truncate">
+                          • {fl.detail}: &quot;{fl.lineContent}&quot;
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Forensic findings */}
+                  {(plagiarismLLMReport || plagiarismMatrix.chatgpt?.llmExplanation) && (
+                    <div className="mt-2.5 rounded-lg border border-[#171717]/10 bg-white p-2 text-[11px] font-bold text-[#171717]/80 dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#a1a1aa]">
+                      <span className="text-[9px] font-black uppercase text-[#171717]/50 dark:text-[#a1a1aa]/70 block">
+                        Forensic LLM Finding:
+                      </span>
+                      <p className="mt-0.5 leading-relaxed">
+                        {plagiarismLLMReport || plagiarismMatrix.chatgpt?.llmExplanation}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <div className="mt-6 flex flex-wrap justify-center gap-2">
                   <button
                     onClick={() => {
@@ -2558,6 +2720,51 @@ export function HireMeContent() {
                           <div className="mt-1 flex justify-between text-[9px] font-mono text-[#171717]/60 dark:text-[#a1a1aa]">
                             <span>Structural Subtree Equivalence: {selectedCandidate === 'Alex Rivera' ? 'Exact AST Branch Match' : 'Zero Collusion'}</span>
                             <span>Cluster Ring: {selectedCandidate === 'Alex Rivera' ? 'Ring #1 (Hostel Node)' : 'Isolated Node'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* AI Code Markers & Emojis Audit Section */}
+                      <div className="mt-4 rounded-lg border border-[#171717]/20 bg-[#fffaf0] p-3 dark:border-[#2e323b] dark:bg-[#1c1f26]">
+                        <div className="flex items-center justify-between">
+                          <span className="font-display text-xs uppercase text-[#171717] dark:text-[#f4f4f7]">
+                            AI-Code & Emoji Scanner
+                          </span>
+                          <span className="rounded bg-[#39d5c8]/20 px-2 py-0.5 text-[9px] font-black uppercase text-[#171717] dark:text-[#39d5c8]">
+                            Copydetect Heuristics
+                          </span>
+                        </div>
+
+                        <div className="mt-2 text-xs font-bold space-y-2">
+                          <div className="flex items-center justify-between border-b border-[#171717]/10 pb-1.5 dark:border-white/10">
+                            <span className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">Detected Emojis in Code/Comments:</span>
+                            <span className="font-mono text-xs">
+                              {selectedCandidate === 'Alex Rivera' ? (
+                                <span className="rounded bg-rose-100 px-1.5 py-0.5 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400">
+                                  🚀 ✨ 🤖 (3 Flagged)
+                                </span>
+                              ) : (
+                                <span className="text-emerald-600 dark:text-emerald-400">0 (Clean)</span>
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between border-b border-[#171717]/10 pb-1.5 dark:border-white/10">
+                            <span className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">Formulaic Step-by-Step Comments:</span>
+                            <span className="font-mono text-xs">
+                              {selectedCandidate === 'Alex Rivera' ? (
+                                <span className="text-rose-600 dark:text-rose-400 font-bold">5 patterns flagged</span>
+                              ) : (
+                                <span className="text-emerald-600 dark:text-emerald-400 font-bold">0 patterns</span>
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">Overall Integrity Verdict:</span>
+                            <span className={`font-mono text-xs font-black ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                              {selectedCandidate === 'Alex Rivera' ? '88.5% AI / Plagiarized' : '96.2% Organic Human'}
+                            </span>
                           </div>
                         </div>
                       </div>

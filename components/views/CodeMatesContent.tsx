@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import {
   ArrowLeft,
   ArrowRight,
+  AlertTriangle,
   Check,
   Code2,
   Copy,
@@ -13,6 +14,8 @@ import {
   Play,
   Plus,
   Send,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Trophy,
   Users,
@@ -22,6 +25,7 @@ import {
 } from 'lucide-react'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { useNavigation } from '@/lib/navigation'
+import { CodeforcesWinnowingEngine, PlagiarismResult } from '@/lib/proctoring/antiCheatEngine'
 
 // Dynamic import with zero SSR overhead
 const Editor = dynamic(() => import('@monaco-editor/react'), {
@@ -135,6 +139,10 @@ export async function processNext(workerFn) {
   const [onlineCount, setOnlineCount] = useState(1)
   const [testScore, setTestScore] = useState<number | null>(null)
   const [roster, setRoster] = useState<{ id: string; name: string; color: string; colorHex: string; isHost?: boolean }[]>([])
+
+  // Plagiarism & AI-code detection state
+  const [plagiarismAnalysis, setPlagiarismAnalysis] = useState<PlagiarismResult | null>(null)
+  const [isCheckingPlagiarism, setIsCheckingPlagiarism] = useState(false)
 
   // Remote cursors state for UI headers
   const [remoteCursorsList, setRemoteCursorsList] = useState<RemoteCursorInfo[]>([])
@@ -898,10 +906,54 @@ export async function processNext(workerFn) {
     setTimeout(() => setCopiedCode(false), 1500)
   }
 
-  const handleRunTests = () => {
+  const handleRunTests = async () => {
     const calculated = Math.min(100, Math.max(70, Math.round(code.length / 8)))
     setTestScore(calculated)
+    setIsCheckingPlagiarism(true)
     setView('results')
+
+    // 1. Instant isomorphic winnowing check
+    const engine = new CodeforcesWinnowingEngine()
+    const peerBaseline = `const taskQueue = [];\nexport function enqueue(task) { taskQueue.push(task); return taskQueue.length; }\nexport async function processNext(workerFn) { const task = taskQueue.find(t => t.status === 'pending'); return task ? await workerFn(task) : null; }`
+    const localResult = engine.compareSubmissions(code, peerBaseline, 'Task Worker Arena Baseline')
+    setPlagiarismAnalysis(localResult)
+
+    // 2. Query backend for deep LLM confidence analysis
+    try {
+      const res = await fetch('/api/plagiarism/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          language: 'javascript',
+          referenceCode: peerBaseline,
+          referenceName: 'Task Worker Arena Baseline',
+          runLLM: true,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setPlagiarismAnalysis({
+          similarityScore: data.similarityScore,
+          matchedFingerprints: data.overlapFingerprints ?? localResult.matchedFingerprints,
+          totalFingerprints: data.totalFingerprints ?? localResult.totalFingerprints,
+          isPlagiarized: data.isPlagiarized,
+          clusterMatchWith: data.referenceMatched || 'Task Worker Arena Baseline',
+          normalizedTokenSample: data.astTokensSample || localResult.normalizedTokenSample,
+          confidence: data.verdict === 'CLEAN' ? 'CLEAN' : data.verdict === 'SUSPICIOUS' ? 'SUSPICIOUS' : 'HIGH',
+          confidenceScore: data.confidenceScore,
+          verdict: data.verdict,
+          isAIGenerated: data.isAIGenerated,
+          detectedEmojis: data.detectedEmojis || [],
+          flaggedComments: data.flaggedComments || [],
+          llmExplanation: data.llmExplanation,
+        })
+      }
+    } catch {
+      // Retain local isomorphic result
+    } finally {
+      setIsCheckingPlagiarism(false)
+    }
   }
 
   return (
@@ -1489,6 +1541,154 @@ export async function processNext(workerFn) {
                 <div className="font-display text-2xl">#1</div>
                 <div className="text-[9px] font-black uppercase text-white/80">Rank</div>
               </div>
+            </div>
+
+            {/* Code Integrity, Plagiarism & AI Detection Card */}
+            <div className="mt-6 rounded-xl border-2 border-[#171717] bg-[#fffaf0] p-4 text-left shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:shadow-[2px_2px_0_#000000]">
+              <div className="flex items-center justify-between border-b border-[#171717]/10 pb-3 dark:border-white/10">
+                <div className="flex items-center gap-2">
+                  {plagiarismAnalysis?.isAIGenerated || plagiarismAnalysis?.isPlagiarized ? (
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#171717] bg-[#ff6b6b] text-white">
+                      <ShieldAlert className="h-4 w-4" />
+                    </div>
+                  ) : (
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#171717] bg-[#6ee56b] text-[#171717]">
+                      <ShieldCheck className="h-4 w-4" />
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="font-display text-base uppercase text-[#171717] dark:text-[#f4f4f7]">
+                      Code Integrity & Plagiarism Analysis
+                    </h3>
+                    <p className="text-[10px] font-bold text-[#171717]/60 dark:text-[#a1a1aa]">
+                      Powered by open-source Copydetect Winnowing & AI heuristics
+                    </p>
+                  </div>
+                </div>
+
+                {isCheckingPlagiarism ? (
+                  <span className="rounded-md border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[10px] font-black uppercase text-[#171717] animate-pulse">
+                    Auditing AI...
+                  </span>
+                ) : plagiarismAnalysis?.isAIGenerated ? (
+                  <span className="rounded-md border border-[#171717] bg-[#ff6b6b] px-2 py-0.5 text-[10px] font-black uppercase text-white">
+                    AI Markers Flagged
+                  </span>
+                ) : plagiarismAnalysis?.isPlagiarized ? (
+                  <span className="rounded-md border border-[#171717] bg-[#ff57ce] px-2 py-0.5 text-[10px] font-black uppercase text-white">
+                    Plagiarism Match
+                  </span>
+                ) : (
+                  <span className="rounded-md border border-[#171717] bg-[#6ee56b] px-2 py-0.5 text-[10px] font-black uppercase text-[#171717]">
+                    Organic Code Verified
+                  </span>
+                )}
+              </div>
+
+              {/* Confidence Score and Metrics Bar */}
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="rounded-lg border border-[#171717]/15 bg-white p-2.5 dark:border-[#2e323b] dark:bg-[#15171c]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                      Confidence Score
+                    </span>
+                    <span
+                      className={`font-mono text-sm font-black ${
+                        plagiarismAnalysis?.isAIGenerated || plagiarismAnalysis?.isPlagiarized
+                          ? 'text-rose-600 dark:text-rose-400'
+                          : 'text-emerald-600 dark:text-emerald-400'
+                      }`}
+                    >
+                      {plagiarismAnalysis?.confidenceScore ?? 95}%{' '}
+                      {plagiarismAnalysis?.isAIGenerated
+                        ? 'AI Generated'
+                        : plagiarismAnalysis?.isPlagiarized
+                        ? 'Plagiarized'
+                        : 'Human Original'}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 ${
+                        plagiarismAnalysis?.isAIGenerated || plagiarismAnalysis?.isPlagiarized
+                          ? 'bg-rose-500'
+                          : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${Math.min(100, plagiarismAnalysis?.confidenceScore ?? 95)}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-[#171717]/15 bg-white p-2.5 dark:border-[#2e323b] dark:bg-[#15171c]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
+                      Token Winnowing Match
+                    </span>
+                    <span className="font-mono text-sm font-black text-[#171717] dark:text-[#f4f4f7]">
+                      {plagiarismAnalysis?.similarityScore ?? 0}%
+                    </span>
+                  </div>
+                  <span className="mt-1 block text-[10px] text-[#171717]/60 dark:text-[#a1a1aa]">
+                    Fingerprints: {plagiarismAnalysis?.matchedFingerprints ?? 0}/
+                    {plagiarismAnalysis?.totalFingerprints ?? 0} hashes
+                  </span>
+                </div>
+              </div>
+
+              {/* Detected Emojis in Code / Comments Alert */}
+              {plagiarismAnalysis?.detectedEmojis && plagiarismAnalysis.detectedEmojis.length > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+                  <div className="flex items-center gap-1.5 font-black">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                    <span>AI-Style Emojis Detected in Code / Comments:</span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {plagiarismAnalysis.detectedEmojis.map((em, i) => (
+                      <span
+                        key={i}
+                        className="rounded-md border border-amber-400 bg-white px-2 py-0.5 font-mono text-xs shadow-[1px_1px_0_#d97706] dark:bg-slate-900"
+                      >
+                        {em}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-[10px] text-amber-800/80 dark:text-amber-300/80">
+                    Generative models (ChatGPT, Claude) commonly include decorative emojis in generated comments.
+                  </p>
+                </div>
+              )}
+
+              {/* Flagged AI Comment Patterns */}
+              {plagiarismAnalysis?.flaggedComments && plagiarismAnalysis.flaggedComments.length > 0 && (
+                <div className="mt-2.5 rounded-lg border border-rose-200 bg-rose-50/80 p-2.5 text-xs dark:border-rose-900/40 dark:bg-rose-950/20">
+                  <span className="font-black text-rose-800 dark:text-rose-300 block mb-1">
+                    Suspicious Robotic Comments ({plagiarismAnalysis.flaggedComments.length}):
+                  </span>
+                  <div className="space-y-1">
+                    {plagiarismAnalysis.flaggedComments.slice(0, 3).map((flag, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between text-[11px] font-mono text-rose-700 dark:text-rose-400"
+                      >
+                        <span className="truncate max-w-[280px]">
+                          L{flag.lineNumber}: {flag.lineContent}
+                        </span>
+                        <span className="text-[9px] uppercase font-bold opacity-80">{flag.flagType}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Forensic Explanation */}
+              {plagiarismAnalysis?.llmExplanation && (
+                <div className="mt-2.5 rounded-lg border border-[#171717]/10 bg-white p-2.5 text-xs text-[#171717]/80 dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#a1a1aa]">
+                  <span className="font-black text-[#171717] dark:text-[#f4f4f7] block mb-0.5">
+                    Forensic Finding:
+                  </span>
+                  <p className="text-[11px] leading-relaxed">{plagiarismAnalysis.llmExplanation}</p>
+                </div>
+              )}
             </div>
 
             <div className="mt-6 flex justify-center gap-2">

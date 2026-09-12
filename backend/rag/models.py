@@ -239,3 +239,33 @@ class Session(BaseModel):
 
     def touch(self) -> None:
         self.updated_at = utcnow()
+
+
+class AICommentFlag(BaseModel):
+    line_number: int | None = None
+    line_content: str
+    flag_type: Literal["emoji", "ai_phrase", "boilerplate"]
+    detail: str
+
+
+class PlagiarismCheckRequest(BaseModel):
+    code: str
+    language: str = "javascript"
+    reference_code: str | None = None
+    reference_name: str = "Baseline"
+    run_llm: bool = True
+
+
+class PlagiarismAnalysis(BaseModel):
+    similarity_score: float = Field(ge=0, le=100)  # 0 to 100%
+    confidence_score: float = Field(ge=0, le=100)  # 0 to 100% confidence of plagiarism/AI
+    verdict: Literal["CLEAN", "SUSPICIOUS", "PLAGIARIZED", "AI_GENERATED"]
+    is_plagiarized: bool
+    is_ai_generated: bool
+    detected_emojis: list[str] = Field(default_factory=list)
+    flagged_comments: list[AICommentFlag] = Field(default_factory=list)
+    overlap_fingerprints: int = 0
+    total_fingerprints: int = 0
+    reference_matched: str = ""
+    llm_explanation: str = ""
+    ast_tokens_sample: str = ""
