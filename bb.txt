@@ -1,4 +1,0 @@
-$ next build
-▲ Next.js 16.3.3 (Turbopack)
-- Environments: .env
-✓ Running next.config.mjs took 17ms
