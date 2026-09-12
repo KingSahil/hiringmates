@@ -31,8 +31,9 @@ from pydantic import BaseModel
 
 from rag.config import load_settings
 from rag.llm import LLMClient, build_llm
-from rag.models import Answer, Identity
+from rag.models import Answer, Identity, PlagiarismCheckRequest
 from rag.pipeline import Pipeline, SubprocessDetector
+from rag.plagiarism import CopyDetectEngine
 from rag.scenarios import DEFAULT_SCENARIO, list_scenarios
 from rag.store import MemoryStore, Store, SupabaseStore
 
@@ -134,6 +135,41 @@ def submit_answers(session_id: str, request: AnswersRequest) -> dict:
     return _view(session)
 
 
+@app.post("/sessions/{session_id}/intake")
+def submit_intake(session_id: str, request: Request) -> dict:
+    """
+    Capture the candidate's intake form answers.
+
+    Shown while extraction and profiling run in the background, so this can land
+    before or after question generation. Stored on the session; folded into the
+    question-generation context if it has arrived by then. Idempotent.
+
+    Returns 404 for an unknown session, 409 if the session already completed.
+    """
+    try:
+        body = json.loads(request.body())
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON")
+
+    answers = body.get("answers")
+    if not isinstance(answers, dict):
+        raise HTTPException(status_code=400, detail="answers object is required")
+
+    pipeline = _pipeline()
+    session = pipeline.store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    session.intake = answers
+    pipeline.store.put_session(session)
+    return {
+        "id": session.id,
+        "status": session.status,
+        "intake_recorded": True,
+        "used_for_questions": session.status in ("awaiting", "complete"),
+    }
+
+
 @app.get("/profiles/{user_id}")
 def get_profile(user_id: str) -> dict:
     pipeline = _pipeline()
@@ -141,6 +177,14 @@ def get_profile(user_id: str) -> dict:
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
     return profile.model_dump(mode="json")
+
+
+@app.post("/plagiarism/check")
+def check_plagiarism(request: PlagiarismCheckRequest) -> dict:
+    pipeline = _pipeline()
+    engine = CopyDetectEngine()
+    result = engine.analyze(request, llm=pipeline.llm if request.run_llm else None)
+    return result.model_dump(mode="json")
 
 
 def _advance_safely(pipeline: Pipeline, session_id: str) -> None:

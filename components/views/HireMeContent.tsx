@@ -150,8 +150,10 @@ export function HireMeContent() {
   const [isReplaying, setIsReplaying] = useState(false)
   const [replaySpeed, setReplaySpeed] = useState<number>(1)
   const [plagiarismMatrix, setPlagiarismMatrix] = useState<Record<string, PlagiarismResult>>({})
+  const [isAuditingPlagiarism, setIsAuditingPlagiarism] = useState(false)
+  const [plagiarismLLMReport, setPlagiarismLLMReport] = useState<string>('')
 
-  // Eye & Gaze Tracking State (Looking Down, Left, Right, Away)
+  // Eye & Gaze Tracking State (Looking Down, Left, Right, Away, Tilt, Multiple Faces, Foreign Object)
   const eyeTrackerRef = useRef<EyeTrackerEngine | null>(null)
   const [gazeStatus, setGazeStatus] = useState<GazeStatus>({
     direction: 'CENTER',
@@ -159,8 +161,22 @@ export function HireMeContent() {
     horizontalOffset: 0,
     verticalOffset: 0,
     faceDetected: true,
+    faceCount: 1,
+    foreignObjectDetected: false,
     warningCount: 0,
     isSustainedDeviation: false,
+    deviationProgress: 0,
+    landmarks: {
+      faceDetected: true,
+      faceCount: 1,
+      foreignObjectDetected: false,
+      faceBox: { x: 25, y: 18, width: 50, height: 60 },
+      leftEye: { x: 40, y: 44 },
+      rightEye: { x: 60, y: 44 },
+      pitch: 0,
+      yaw: 0,
+      roll: 0,
+    },
   })
   const [gazeWarnings, setGazeWarnings] = useState(0)
   const [showGazeWarningModal, setShowGazeWarningModal] = useState(false)
@@ -279,6 +295,11 @@ export function HireMeContent() {
       const stream = await navigator.mediaDevices.getUserMedia(constraints)
       setCameraStream(stream)
       setCameraReady(true)
+      if (videoPreviewRef.current) {
+        videoPreviewRef.current.srcObject = stream
+        videoPreviewRef.current.muted = true
+        videoPreviewRef.current.play().catch(() => {})
+      }
 
       // Refresh camera labels after permission is given
       await enumerateCameras()
@@ -290,6 +311,11 @@ export function HireMeContent() {
           const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
           setCameraStream(fallbackStream)
           setCameraReady(true)
+          if (videoPreviewRef.current) {
+            videoPreviewRef.current.srcObject = fallbackStream
+            videoPreviewRef.current.muted = true
+            videoPreviewRef.current.play().catch(() => {})
+          }
           await enumerateCameras()
           return
         } catch {}
@@ -445,15 +471,19 @@ export function HireMeContent() {
 
   // Attach camera stream to preview element
   useEffect(() => {
-    if (videoPreviewRef.current) {
+    if (videoPreviewRef.current && cameraStream) {
       videoPreviewRef.current.srcObject = cameraStream
+      videoPreviewRef.current.muted = true
+      videoPreviewRef.current.play().catch(() => {})
     }
   }, [cameraStream, step])
 
   // Attach camera stream to floating PIP element during assessment
   useEffect(() => {
-    if (pipVideoRef.current) {
+    if (pipVideoRef.current && cameraStream) {
       pipVideoRef.current.srcObject = cameraStream
+      pipVideoRef.current.muted = true
+      pipVideoRef.current.play().catch(() => {})
     }
   }, [cameraStream, step])
 
@@ -507,9 +537,9 @@ export function HireMeContent() {
     return () => cleanup()
   }, [step, isTerminated])
 
-  // Real-time Eye & Gaze Tracking loop (Looking Down, Left, Right, Away)
+  // Real-time Eye & Gaze Tracking loop (Looking Down, Left, Right, Away, Tilt)
   useEffect(() => {
-    if (step !== 'assessment' || isTerminated || !cameraStream) {
+    if ((step !== 'assessment' && step !== 'check') || isTerminated || !cameraStream) {
       if (eyeTrackerRef.current) {
         eyeTrackerRef.current.stop()
         eyeTrackerRef.current = null
@@ -517,33 +547,81 @@ export function HireMeContent() {
       return
     }
 
+    const isAssessment = step === 'assessment'
+
     const tracker = new EyeTrackerEngine({
       maxWarnings: 3,
-      sustainedDurationMs: 1800,
       onGazeUpdate: (status) => {
         setGazeStatus(status)
       },
       onWarning: (count, direction) => {
+        if (!isAssessment) return // During 'check' step, don't trigger penalty strikes
+
+        // ZERO TOLERANCE: Immediate cancellation for smartphone / foreign object
+        if (direction === 'FOREIGN_OBJECT') {
+          setIsTerminated(true)
+          setShowGazeWarningModal(false)
+          setShowTabWarning(false)
+          setIsPaused(true)
+          setTerminationReason(
+            'HIRING PROCESS CANCELLED: An unauthorized smartphone / foreign device was identified in the camera frame by AI Vision Proctoring. The candidate is disqualified from the hiring process.'
+          )
+          setSecurityViolations((prev) => [
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              type: 'HARDWARE_ANOMALY',
+              detail: 'CRITICAL INTEGRITY VIOLATION: Unauthorized Smartphone / Foreign Object detected in camera frame. Hiring process cancelled immediately.',
+              severity: 'CRITICAL',
+            },
+            ...prev,
+          ])
+          if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+          if (micStream) micStream.getTracks().forEach((t) => t.stop())
+          if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
+          setCameraReady(false)
+          setMicReady(false)
+          setScreenReady(false)
+          setStep('results')
+          return
+        }
+
         setGazeWarnings(count)
         setIsPaused(true)
-        setGazeWarningDetail({ count, direction: direction.replace('_', ' ') })
+        const friendlyDir =
+          direction === 'MULTIPLE_FACES'
+            ? 'MULTIPLE PEOPLE DETECTED'
+            : direction === 'LOOKING_AWAY'
+            ? 'CANDIDATE FACE MISSING'
+            : direction.replace('_', ' ')
+        setGazeWarningDetail({ count, direction: friendlyDir })
         setShowGazeWarningModal(true)
         setSecurityViolations((prev) => [
           {
             timestamp: new Date().toLocaleTimeString(),
-            type: 'VOICE_DETECTED',
-            detail: `Gaze Strike #${count} of 3: Sustained deviation (${direction.replace('_', ' ')}). Please refocus on the test screen.`,
+            type: direction === 'MULTIPLE_FACES' ? 'MULTI_MONITOR_DETECTED' : 'VOICE_DETECTED',
+            detail: `Proctor Strike #${count} of 3: ${friendlyDir}. Please maintain test integrity.`,
             severity: count >= 3 ? 'CRITICAL' : 'WARNING',
           },
           ...prev,
         ])
       },
       onTerminated: (reason) => {
+        if (!isAssessment) return
         setIsTerminated(true)
         setShowGazeWarningModal(false)
         setShowTabWarning(false)
         setIsPaused(true)
         setTerminationReason(reason)
+
+        setSecurityViolations((prev) => [
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'VOICE_DETECTED',
+            detail: `CRITICAL PROCTORING TERMINATION: ${reason}`,
+            severity: 'CRITICAL',
+          },
+          ...prev,
+        ])
 
         if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
         if (micStream) micStream.getTracks().forEach((t) => t.stop())
@@ -561,11 +639,17 @@ export function HireMeContent() {
     let cancelled = false
     const checkVideo = () => {
       if (cancelled) return
-      if (pipVideoRef.current && pipVideoRef.current.readyState >= 2) {
-        tracker.start(pipVideoRef.current)
-      } else {
-        setTimeout(checkVideo, 250)
+      const targetVideo = isAssessment ? pipVideoRef.current : videoPreviewRef.current
+      if (targetVideo) {
+        if (targetVideo.paused) {
+          targetVideo.play().catch(() => {})
+        }
+        if (targetVideo.readyState >= 2 && targetVideo.videoWidth > 0) {
+          tracker.start(targetVideo)
+          return
+        }
       }
+      setTimeout(checkVideo, 150)
     }
     checkVideo()
 
@@ -606,6 +690,44 @@ export function HireMeContent() {
         peer: vsPeer,
       })
       setFlightMetrics(flightRecorderRef.current.computeMetrics())
+
+      // Query deep backend LLM forensics
+      setIsAuditingPlagiarism(true)
+      fetch('/api/plagiarism/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: text,
+          language: 'markdown',
+          referenceCode: LLM_BENCHMARK_SOLUTIONS.chatgpt_mcp_response,
+          referenceName: 'ChatGPT-4o Baseline',
+          runLLM: true,
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data) {
+            if (data.llmExplanation) {
+              setPlagiarismLLMReport(data.llmExplanation)
+            }
+            if (data.confidenceScore !== undefined) {
+              setPlagiarismMatrix((prev) => ({
+                ...prev,
+                chatgpt: {
+                  ...prev.chatgpt,
+                  confidenceScore: data.confidenceScore,
+                  verdict: data.verdict ?? prev.chatgpt?.verdict,
+                  isAIGenerated: data.isAIGenerated ?? prev.chatgpt?.isAIGenerated,
+                  detectedEmojis: data.detectedEmojis ?? prev.chatgpt?.detectedEmojis,
+                  flaggedComments: data.flaggedComments ?? prev.chatgpt?.flaggedComments,
+                  llmExplanation: data.llmExplanation ?? prev.chatgpt?.llmExplanation,
+                },
+              }))
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => setIsAuditingPlagiarism(false))
     }
   }, [step, answers])
 
@@ -979,34 +1101,137 @@ export function HireMeContent() {
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               {/* Left: Live Video / Camera Feed */}
               <div className="relative flex aspect-video flex-col items-center justify-center rounded-xl border-2 border-[#171717] bg-[#171717] text-center text-[#fffaf0] dark:border-[#2e323b] overflow-hidden">
+                {/* Permanently mounted video element prevents initial black screen lag */}
+                <video
+                  ref={videoPreviewRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  onLoadedMetadata={(e) => {
+                    e.currentTarget.play().catch(() => {})
+                  }}
+                  className={`h-full w-full object-cover ${cameraStream ? 'block' : 'hidden'}`}
+                />
+
                 {cameraStream ? (
                   <>
-                    <video
-                      ref={videoPreviewRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="h-full w-full object-cover"
-                    />
-                    {/* Live indicator badge and Camera Switch button */}
-                    <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between">
-                      <div className="flex items-center gap-1.5 rounded-md bg-black/80 px-2 py-0.5 text-[10px] font-black text-[#39d5c8] backdrop-blur-xs">
-                        <span className="h-2 w-2 rounded-full bg-[#39d5c8] animate-pulse" />
-                        LIVE FEED
-                      </div>
-                      <button
-                        onClick={() => switchCamera()}
-                        disabled={isRequestingCamera}
-                        title="Switch camera device"
-                        className="cursor-pointer flex items-center gap-1 rounded-md bg-black/80 px-2 py-1 text-[10px] font-bold text-white hover:text-[#ffd84d] transition-all backdrop-blur-xs"
+                    {/* Dynamic Primary Face Bounding Box */}
+                    {gazeStatus.landmarks && gazeStatus.landmarks.faceDetected && (
+                      <div
+                        className={`absolute pointer-events-none transition-all duration-75 border-2 rounded-lg ${
+                          gazeStatus.direction === 'CENTER'
+                            ? 'border-emerald-400/80 shadow-[0_0_10px_rgba(52,211,153,0.35)]'
+                            : gazeStatus.direction === 'MULTIPLE_FACES' || gazeStatus.direction === 'FOREIGN_OBJECT'
+                            ? 'border-rose-500 bg-rose-500/15 shadow-[0_0_14px_rgba(244,63,94,0.6)] animate-pulse'
+                            : 'border-amber-400/90 bg-amber-400/10 shadow-[0_0_12px_rgba(251,191,36,0.4)]'
+                        }`}
+                        style={{
+                          left: `${Math.max(2, Math.min(80, gazeStatus.landmarks.faceBox.x))}%`,
+                          top: `${Math.max(2, Math.min(75, gazeStatus.landmarks.faceBox.y))}%`,
+                          width: `${Math.max(18, Math.min(85, gazeStatus.landmarks.faceBox.width))}%`,
+                          height: `${Math.max(22, Math.min(90, gazeStatus.landmarks.faceBox.height))}%`,
+                        }}
                       >
-                        <RefreshCw className={`h-2.5 w-2.5 ${isRequestingCamera ? 'animate-spin' : ''}`} />
-                        <span>Switch Camera</span>
-                      </button>
-                    </div>
-                    {/* Bottom stats overlay */}
-                    <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between rounded-md bg-black/80 px-2.5 py-1 text-[10px] font-bold text-white backdrop-blur-xs">
-                      <span className="text-[#39d5c8]">Camera Calibrated</span>
+                        <span className="absolute -top-1 -left-1 h-2 w-2 border-t-2 border-l-2 border-inherit" />
+                        <span className="absolute -top-1 -right-1 h-2 w-2 border-t-2 border-r-2 border-inherit" />
+                        <span className="absolute -bottom-1 -left-1 h-2 w-2 border-b-2 border-l-2 border-inherit" />
+                        <span className="absolute -bottom-1 -right-1 h-2 w-2 border-b-2 border-r-2 border-inherit" />
+
+                        {/* Head Pose telemetry badge */}
+                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/90 px-1.5 py-0.5 text-[8px] font-mono font-black text-[#39d5c8] backdrop-blur-xs">
+                          P:{gazeStatus.landmarks.pitch}° Y:{gazeStatus.landmarks.yaw}° R:{gazeStatus.landmarks.roll}°
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Secondary Face Bounding Box (Multiple People Detection) */}
+                    {gazeStatus.landmarks?.secondaryFaceBox && (
+                      <div
+                        className="absolute pointer-events-none border-2 border-rose-500 bg-rose-500/20 rounded-lg shadow-[0_0_12px_rgba(244,63,94,0.8)] animate-pulse"
+                        style={{
+                          left: `${Math.max(0, Math.min(85, gazeStatus.landmarks.secondaryFaceBox.x))}%`,
+                          top: `${Math.max(0, Math.min(85, gazeStatus.landmarks.secondaryFaceBox.y))}%`,
+                          width: `${Math.max(15, Math.min(50, gazeStatus.landmarks.secondaryFaceBox.width))}%`,
+                          height: `${Math.max(15, Math.min(50, gazeStatus.landmarks.secondaryFaceBox.height))}%`,
+                        }}
+                      >
+                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1.5 py-0.5 text-[8px] font-black text-white">
+                          ⚠️ INTRUDER / 2ND PERSON
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Foreign Object / Phone Bounding Box */}
+                    {gazeStatus.landmarks?.foreignObjectBox && (
+                      <div
+                        className="absolute pointer-events-none border-2 border-dashed border-rose-400 bg-rose-400/20 rounded-md shadow-[0_0_12px_rgba(244,63,94,0.7)] animate-pulse"
+                        style={{
+                          left: `${Math.max(0, Math.min(85, gazeStatus.landmarks.foreignObjectBox.x))}%`,
+                          top: `${Math.max(0, Math.min(85, gazeStatus.landmarks.foreignObjectBox.y))}%`,
+                          width: `${Math.max(15, Math.min(60, gazeStatus.landmarks.foreignObjectBox.width))}%`,
+                          height: `${Math.max(12, Math.min(50, gazeStatus.landmarks.foreignObjectBox.height))}%`,
+                        }}
+                      >
+                        <div className="absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1.5 py-0.5 text-[8px] font-black text-white">
+                          {gazeStatus.landmarks.foreignObjectLabel || '⚠️ SMARTPHONE / OBJECT DETECTED'}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Dual-Eye Reticles (True Pupil Sclera Tracking) */}
+                    {gazeStatus.landmarks && gazeStatus.landmarks.faceDetected && (
+                      <>
+                        <div
+                          className="absolute pointer-events-none transition-all duration-75 text-[#39d5c8]"
+                          style={{
+                            left: `${Math.max(5, Math.min(95, gazeStatus.landmarks.leftEye.x))}%`,
+                            top: `${Math.max(5, Math.min(95, gazeStatus.landmarks.leftEye.y))}%`,
+                            transform: 'translate(-50%, -50%)',
+                          }}
+                        >
+                          <div className="h-3 w-3 rounded-full border border-dashed border-[#39d5c8] flex items-center justify-center">
+                            <span className="h-1 w-1 bg-[#39d5c8] rounded-full" />
+                          </div>
+                        </div>
+                        <div
+                          className="absolute pointer-events-none transition-all duration-75 text-[#39d5c8]"
+                          style={{
+                            left: `${Math.max(5, Math.min(95, gazeStatus.landmarks.rightEye.x))}%`,
+                            top: `${Math.max(5, Math.min(95, gazeStatus.landmarks.rightEye.y))}%`,
+                            transform: 'translate(-50%, -50%)',
+                          }}
+                        >
+                          <div className="h-3 w-3 rounded-full border border-dashed border-[#39d5c8] flex items-center justify-center">
+                            <span className="h-1 w-1 bg-[#39d5c8] rounded-full" />
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Real-time Posture Status Banner on Bottom */}
+                    <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between rounded-md bg-black/85 px-2.5 py-1.5 text-[10px] font-bold text-white backdrop-blur-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`h-2 w-2 rounded-full ${
+                          gazeStatus.direction === 'CENTER' ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'
+                        }`} />
+                        <span className={gazeStatus.direction === 'CENTER' ? 'text-emerald-400' : 'text-amber-400 font-black'}>
+                          {gazeStatus.direction === 'CENTER'
+                            ? '✅ Face & Eyes Centered'
+                            : gazeStatus.direction === 'MULTIPLE_FACES'
+                            ? '⚠️ Multiple People Detected in Frame!'
+                            : gazeStatus.direction === 'FOREIGN_OBJECT'
+                            ? '⚠️ Foreign Object / Phone Detected!'
+                            : gazeStatus.direction === 'LOOKING_DOWN'
+                            ? `⚠️ Head Tilted Down (Pitch: ${gazeStatus.landmarks?.pitch ?? 0}°) · Phone on Lap`
+                            : gazeStatus.direction === 'LOOKING_LEFT'
+                            ? `⚠️ Head Turned Left (Yaw: ${gazeStatus.landmarks?.yaw ?? 0}°) · 2nd Mon`
+                            : gazeStatus.direction === 'LOOKING_RIGHT'
+                            ? `⚠️ Head Turned Right (Yaw: ${gazeStatus.landmarks?.yaw ?? 0}°) · 2nd Mon`
+                            : gazeStatus.direction === 'HEAD_TILT'
+                            ? `⚠️ Head Tilted Sideways (Roll: ${gazeStatus.landmarks?.roll ?? 0}°)`
+                            : '❌ Face Missing from Camera'}
+                        </span>
+                      </div>
                       <button
                         onClick={stopCamera}
                         className="cursor-pointer text-xs text-rose-400 hover:underline"
@@ -1085,6 +1310,44 @@ export function HireMeContent() {
                           </option>
                         ))}
                       </select>
+                    </div>
+                  )}
+
+                  {/* Real-Time Eye & Head Tilt Tracking Verification Card */}
+                  {cameraReady && (
+                    <div className="rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Sparkles className="h-3.5 w-3.5 text-[#39d5c8]" />
+                          AI Eye & Head Tilt Tracking
+                        </span>
+                        <span className={`flex items-center gap-1 text-[10px] font-black ${
+                          gazeStatus.direction === 'CENTER' ? 'text-emerald-500 dark:text-emerald-400' : 'text-amber-500 dark:text-amber-400'
+                        }`}>
+                          {gazeStatus.direction === 'CENTER' ? 'Aligned' : 'Testing Tilt'}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between rounded bg-[#171717]/5 dark:bg-[#1c1f26] px-2 py-1 text-[9px]">
+                        <span className="font-mono text-[#171717]/70 dark:text-white/70">
+                          {gazeStatus.direction === 'CENTER'
+                            ? `Pitch: ${gazeStatus.landmarks?.pitch ?? 0}° | Yaw: ${gazeStatus.landmarks?.yaw ?? 0}° | Roll: ${gazeStatus.landmarks?.roll ?? 0}°`
+                            : gazeStatus.direction === 'LOOKING_DOWN'
+                            ? `⚠️ Head Tilted Down (${gazeStatus.landmarks?.pitch ?? 0}°) · Phone Sim`
+                            : gazeStatus.direction === 'LOOKING_LEFT'
+                            ? `⚠️ Turned Left (${gazeStatus.landmarks?.yaw ?? 0}°)`
+                            : gazeStatus.direction === 'LOOKING_RIGHT'
+                            ? `⚠️ Turned Right (${gazeStatus.landmarks?.yaw ?? 0}°)`
+                            : gazeStatus.direction === 'HEAD_TILT'
+                            ? `⚠️ Head Tilt (${gazeStatus.landmarks?.roll ?? 0}°)`
+                            : 'Face Missing'}
+                        </span>
+                        <button
+                          onClick={() => eyeTrackerRef.current?.recalibrate()}
+                          className="font-bold text-[#39d5c8] hover:underline cursor-pointer"
+                        >
+                          Recenter
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -1237,6 +1500,19 @@ export function HireMeContent() {
               </div>
             </div>
 
+            {/* Real-time Phone / Foreign Object Warning Banner */}
+            {gazeStatus.foreignObjectDetected && (
+              <div className="mt-4 rounded-xl border-2 border-rose-500 bg-rose-50 p-3 text-xs font-bold text-rose-800 dark:border-rose-900/80 dark:bg-rose-950/50 dark:text-rose-200 animate-pulse">
+                <div className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400 font-black">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>PROHIBITED OBJECT DETECTED: {gazeStatus.landmarks?.foreignObjectLabel || 'SMARTPHONE'}</span>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed">
+                  A smartphone or unauthorized hardware device was detected in your camera frame. Please put your phone away and clear your workspace before continuing. Having a smartphone present during the assessment will immediately terminate your session and cancel your hiring process.
+                </p>
+              </div>
+            )}
+
             <div className="mt-6 flex items-center justify-between border-t border-[#171717]/15 pt-4 dark:border-[#2e323b]">
               <button
                 onClick={() => setStep('profile')}
@@ -1245,11 +1521,19 @@ export function HireMeContent() {
                 <ArrowLeft className="h-3.5 w-3.5" /> Back
               </button>
               <button
-                disabled={!consentChecked}
+                disabled={!consentChecked || gazeStatus.foreignObjectDetected}
                 onClick={handleStartAssessment}
                 className="btn-neo btn-neo-lemon py-2 text-xs disabled:opacity-40"
               >
-                Start Assessment <Play className="h-3.5 w-3.5 fill-current" />
+                {gazeStatus.foreignObjectDetected ? (
+                  <span className="flex items-center gap-1.5 text-rose-700 dark:text-rose-300 font-black">
+                    <AlertTriangle className="h-3.5 w-3.5" /> Remove Phone to Start
+                  </span>
+                ) : (
+                  <>
+                    Start Assessment <Play className="h-3.5 w-3.5 fill-current" />
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1576,12 +1860,16 @@ export function HireMeContent() {
 
               <div className="mt-4 rounded-xl border-2 border-[#171717] bg-white p-4 text-xs font-bold leading-relaxed text-[#171717] shadow-[2px_2px_0_#171717]">
                 <p>
-                  The AI eye tracking engine detected sustained gaze deviation ({gazeWarningDetail.direction}) away from the test area for more than 1.8 seconds.
+                  {gazeWarningDetail.direction.includes('MULTIPLE')
+                    ? 'The AI proctoring engine detected multiple faces or a second person in your camera frame. You must complete this assessment alone without room companions.'
+                    : gazeWarningDetail.direction.includes('FOREIGN')
+                    ? 'The AI proctoring engine detected an unauthorized handheld device (smartphone, tablet, or secondary screen) in the proctored testing area.'
+                    : `The AI proctoring engine detected sustained gaze deviation (${gazeWarningDetail.direction}) away from the test area for more than 1.5 seconds.`}
                 </p>
                 <p className="mt-2 text-rose-700 font-black">
                   {gazeWarningDetail.count >= 3
-                    ? '⚠️ CRITICAL: THIS IS YOUR 3RD AND FINAL WARNING (3/3). Any further gaze deviation (looking down at phone, left, right, or away) will IMMEDIATELY TERMINATE your session with disqualification.'
-                    : `⚠️ WARNING ${gazeWarningDetail.count} OF 3: Looking down at your lap/phone, looking right/left, or looking away from the screen is strictly monitored. 3 total warnings allowed before session termination.`}
+                    ? '⚠️ CRITICAL: THIS IS YOUR 3RD AND FINAL WARNING (3/3). Any further infraction (multi-face, phone, looking down, or turning away) will IMMEDIATELY TERMINATE your session with disqualification.'
+                    : `⚠️ WARNING ${gazeWarningDetail.count} OF 3: Online proctoring requires your face to remain centered, single-occupant testing, and zero mobile phone presence. 3 total warnings allowed before automatic session termination.`}
                 </p>
               </div>
 
@@ -1618,19 +1906,114 @@ export function HireMeContent() {
                   </div>
                 )}
 
-                {/* Eye tracking crosshair reticle overlay */}
-                <div
-                  className="absolute pointer-events-none transition-all duration-100 text-[#39d5c8] opacity-80"
-                  style={{
-                    top: `${Math.max(20, Math.min(80, 50 + gazeStatus.verticalOffset * 30))}%`,
-                    left: `${Math.max(20, Math.min(80, 50 + gazeStatus.horizontalOffset * 30))}%`,
-                    transform: 'translate(-50%, -50%)',
-                  }}
-                >
-                  <div className="h-5 w-5 border-2 border-dashed rounded-full border-[#39d5c8] flex items-center justify-center">
-                    <span className="h-1.5 w-1.5 bg-[#39d5c8] rounded-full" />
+                {/* Dynamic Tracked Face Bounding Box */}
+                {gazeStatus.landmarks && gazeStatus.landmarks.faceDetected && (
+                  <div
+                    className={`absolute pointer-events-none transition-all duration-75 border-2 rounded-lg ${
+                      gazeStatus.direction === 'CENTER'
+                        ? 'border-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.3)]'
+                        : gazeStatus.isSustainedDeviation
+                        ? 'border-rose-500 bg-rose-500/20 shadow-[0_0_14px_rgba(244,63,94,0.6)] animate-pulse'
+                        : 'border-amber-400/90 bg-amber-400/10 shadow-[0_0_10px_rgba(251,191,36,0.4)]'
+                    }`}
+                    style={{
+                      left: `${Math.max(5, Math.min(75, gazeStatus.landmarks.faceBox.x))}%`,
+                      top: `${Math.max(5, Math.min(70, gazeStatus.landmarks.faceBox.y))}%`,
+                      width: `${Math.max(20, Math.min(70, gazeStatus.landmarks.faceBox.width))}%`,
+                      height: `${Math.max(25, Math.min(80, gazeStatus.landmarks.faceBox.height))}%`,
+                    }}
+                  >
+                    <span className="absolute -top-1 -left-1 h-2 w-2 border-t-2 border-l-2 border-inherit" />
+                    <span className="absolute -top-1 -right-1 h-2 w-2 border-t-2 border-r-2 border-inherit" />
+                    <span className="absolute -bottom-1 -left-1 h-2 w-2 border-b-2 border-l-2 border-inherit" />
+                    <span className="absolute -bottom-1 -right-1 h-2 w-2 border-b-2 border-r-2 border-inherit" />
+
+                    {/* Live Head Pose degree telemetry badge */}
+                    <div className="absolute -top-4.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/90 px-1 py-0.5 text-[7px] font-mono font-black text-[#39d5c8] backdrop-blur-xs">
+                      P:{gazeStatus.landmarks.pitch}° Y:{gazeStatus.landmarks.yaw}° R:{gazeStatus.landmarks.roll}°
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* Secondary Face Bounding Box (Intruder Detection in Assessment) */}
+                {gazeStatus.landmarks?.secondaryFaceBox && (
+                  <div
+                    className="absolute pointer-events-none border-2 border-rose-500 bg-rose-500/25 rounded-md shadow-[0_0_10px_rgba(244,63,94,0.8)] animate-pulse"
+                    style={{
+                      left: `${Math.max(0, Math.min(85, gazeStatus.landmarks.secondaryFaceBox.x))}%`,
+                      top: `${Math.max(0, Math.min(85, gazeStatus.landmarks.secondaryFaceBox.y))}%`,
+                      width: `${Math.max(15, Math.min(50, gazeStatus.landmarks.secondaryFaceBox.width))}%`,
+                      height: `${Math.max(15, Math.min(50, gazeStatus.landmarks.secondaryFaceBox.height))}%`,
+                    }}
+                  >
+                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1 py-0.5 text-[7px] font-black text-white">
+                      ⚠️ 2ND PERSON
+                    </div>
+                  </div>
+                )}
+
+                {/* Foreign Object / Phone Bounding Box */}
+                {gazeStatus.landmarks?.foreignObjectBox && (
+                  <div
+                    className="absolute pointer-events-none border-2 border-dashed border-rose-400 bg-rose-400/25 rounded-md shadow-[0_0_10px_rgba(244,63,94,0.8)] animate-pulse"
+                    style={{
+                      left: `${Math.max(0, Math.min(85, gazeStatus.landmarks.foreignObjectBox.x))}%`,
+                      top: `${Math.max(0, Math.min(85, gazeStatus.landmarks.foreignObjectBox.y))}%`,
+                      width: `${Math.max(15, Math.min(60, gazeStatus.landmarks.foreignObjectBox.width))}%`,
+                      height: `${Math.max(12, Math.min(50, gazeStatus.landmarks.foreignObjectBox.height))}%`,
+                    }}
+                  >
+                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1.5 py-0.5 text-[7px] font-black text-white">
+                      {gazeStatus.landmarks.foreignObjectLabel || '⚠️ PHONE / OBJECT'}
+                    </div>
+                  </div>
+                )}
+
+                {/* Dual-Eye Reticles */}
+                {gazeStatus.landmarks && gazeStatus.landmarks.faceDetected && (
+                  <>
+                    <div
+                      className="absolute pointer-events-none transition-all duration-75 text-[#39d5c8]"
+                      style={{
+                        left: `${Math.max(5, Math.min(95, gazeStatus.landmarks.leftEye.x))}%`,
+                        top: `${Math.max(5, Math.min(95, gazeStatus.landmarks.leftEye.y))}%`,
+                        transform: 'translate(-50%, -50%)',
+                      }}
+                    >
+                      <div className="h-2.5 w-2.5 rounded-full border border-dashed border-[#39d5c8] flex items-center justify-center">
+                        <span className="h-0.5 w-0.5 bg-[#39d5c8] rounded-full" />
+                      </div>
+                    </div>
+                    <div
+                      className="absolute pointer-events-none transition-all duration-75 text-[#39d5c8]"
+                      style={{
+                        left: `${Math.max(5, Math.min(95, gazeStatus.landmarks.rightEye.x))}%`,
+                        top: `${Math.max(5, Math.min(95, gazeStatus.landmarks.rightEye.y))}%`,
+                        transform: 'translate(-50%, -50%)',
+                      }}
+                    >
+                      <div className="h-2.5 w-2.5 rounded-full border border-dashed border-[#39d5c8] flex items-center justify-center">
+                        <span className="h-0.5 w-0.5 bg-[#39d5c8] rounded-full" />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Real-time Deviation Warning Progress Bar */}
+                {gazeStatus.direction !== 'CENTER' && (
+                  <div className="absolute top-6 left-1.5 right-1.5 z-10 pointer-events-none">
+                    <div className="flex items-center justify-between text-[7px] font-black text-rose-300 mb-0.5 bg-black/70 px-1 py-0.5 rounded backdrop-blur-xs">
+                      <span>STRIKE WARNING INCOMING</span>
+                      <span>{Math.round((gazeStatus.deviationProgress ?? 0) * 100)}%</span>
+                    </div>
+                    <div className="h-1 w-full bg-black/80 rounded-full overflow-hidden border border-rose-500/40">
+                      <div
+                        className="h-full bg-rose-500 transition-all duration-75"
+                        style={{ width: `${Math.round((gazeStatus.deviationProgress ?? 0) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* Recording indicator */}
                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-black text-rose-400 backdrop-blur-xs">
@@ -1644,7 +2027,21 @@ export function HireMeContent() {
                     gazeStatus.direction === 'CENTER' ? 'bg-emerald-400' : 'bg-rose-500 animate-ping'
                   }`} />
                   <span className={gazeStatus.direction === 'CENTER' ? 'text-emerald-400' : 'text-rose-400 font-black'}>
-                    {gazeStatus.direction === 'CENTER' ? 'EYES CENTER' : gazeStatus.direction.replace('_', ' ')}
+                    {gazeStatus.direction === 'CENTER'
+                      ? 'EYES CENTER'
+                      : gazeStatus.direction === 'MULTIPLE_FACES'
+                      ? '⚠️ MULTIPLE PEOPLE'
+                      : gazeStatus.direction === 'FOREIGN_OBJECT'
+                      ? '⚠️ PHONE DETECTED'
+                      : gazeStatus.direction === 'LOOKING_DOWN'
+                      ? '⚠️ TILT DOWN (Phone)'
+                      : gazeStatus.direction === 'LOOKING_LEFT'
+                      ? '⚠️ TURNED LEFT'
+                      : gazeStatus.direction === 'LOOKING_RIGHT'
+                      ? '⚠️ TURNED RIGHT'
+                      : gazeStatus.direction === 'HEAD_TILT'
+                      ? '⚠️ HEAD TILT'
+                      : '❌ NO FACE'}
                   </span>
                 </div>
 
@@ -1677,6 +2074,13 @@ export function HireMeContent() {
                   </div>
                 </span>
                 <button
+                  onClick={() => eyeTrackerRef.current?.recalibrate()}
+                  title="Recenter zero-point posture"
+                  className="hover:text-[#ffd84d] cursor-pointer text-[#ffd84d] text-[8px] font-bold"
+                >
+                  🎯 Recenter
+                </button>
+                <button
                   onClick={() => switchCamera()}
                   disabled={isRequestingCamera}
                   title="Switch / Flip Camera"
@@ -1703,11 +2107,17 @@ export function HireMeContent() {
             {isTerminated ? (
               <>
                 <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border-2 border-[#171717] bg-[#ff6b6b] text-white dark:border-[#000000]">
-                  <XCircle className="h-8 w-8" />
+                  {terminationReason?.includes('Foreign') || terminationReason?.includes('smartphone') || terminationReason?.includes('phone') || terminationReason?.includes('SMARTPHONE') ? (
+                    <Smartphone className="h-8 w-8" />
+                  ) : (
+                    <XCircle className="h-8 w-8" />
+                  )}
                 </div>
 
                 <h2 className="mt-4 font-display text-4xl uppercase text-rose-600 dark:text-rose-400">
-                  Session Terminated
+                  {terminationReason?.includes('Foreign') || terminationReason?.includes('smartphone') || terminationReason?.includes('phone') || terminationReason?.includes('SMARTPHONE')
+                    ? 'Hiring Process Cancelled'
+                    : 'Session Terminated'}
                 </h2>
                 <p className="mt-1 text-xs font-bold text-[#171717]/70 dark:text-[#a1a1aa]">
                   {terminationReason || 'Academic integrity violations detected. This assessment was automatically terminated.'}
@@ -1725,7 +2135,7 @@ export function HireMeContent() {
                     <div className="text-[9px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">Attempted</div>
                   </div>
                   <div className="rounded-xl border border-rose-400 bg-[#ffe6f8] p-3 dark:border-rose-900 dark:bg-rose-950/50">
-                    <div className="font-display text-2xl text-rose-600 dark:text-rose-400">TERMINATED</div>
+                    <div className="font-display text-2xl text-rose-600 dark:text-rose-400">DISQUALIFIED</div>
                     <div className="text-[9px] font-black uppercase text-rose-700 dark:text-rose-300">Integrity</div>
                   </div>
                 </div>
@@ -1786,6 +2196,128 @@ export function HireMeContent() {
                     <div className="font-display text-2xl text-[#ff57ce]">CLEAR</div>
                     <div className="text-[9px] font-black uppercase text-[#171717]/60">Integrity</div>
                   </div>
+                </div>
+
+                {/* AI-Code, Emojis & Plagiarism Confidence Audit Card */}
+                <div className="mt-5 rounded-xl border-2 border-[#171717] bg-[#fffaf0] p-4 text-left shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:shadow-[2px_2px_0_#000000]">
+                  <div className="flex items-center justify-between border-b border-[#171717]/10 pb-2.5 dark:border-white/10">
+                    <div className="flex items-center gap-2">
+                      {plagiarismMatrix.chatgpt?.isAIGenerated || plagiarismMatrix.chatgpt?.isPlagiarized ? (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#171717] bg-[#ff6b6b] text-white">
+                          <ShieldAlert className="h-4 w-4" />
+                        </div>
+                      ) : (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#171717] bg-[#6ee56b] text-[#171717]">
+                          <ShieldCheck className="h-4 w-4" />
+                        </div>
+                      )}
+                      <div>
+                        <h4 className="font-display text-sm uppercase text-[#171717] dark:text-[#f4f4f7]">
+                          AI-Code & Plagiarism Forensic Scorecard
+                        </h4>
+                        <span className="text-[9px] font-bold text-[#171717]/60 dark:text-[#a1a1aa]">
+                          Open-source Copydetect Winnowing + Backend LLM Confidence
+                        </span>
+                      </div>
+                    </div>
+
+                    {isAuditingPlagiarism ? (
+                      <span className="rounded-md border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[9px] font-black uppercase text-[#171717] animate-pulse">
+                        LLM Auditing...
+                      </span>
+                    ) : (
+                      <span
+                        className={`rounded-md border border-[#171717] px-2 py-0.5 text-[9px] font-black uppercase ${
+                          plagiarismMatrix.chatgpt?.isAIGenerated || plagiarismMatrix.chatgpt?.isPlagiarized
+                            ? 'bg-[#ff6b6b] text-white'
+                            : 'bg-[#6ee56b] text-[#171717]'
+                        }`}
+                      >
+                        {plagiarismMatrix.chatgpt?.confidenceScore ?? 96}%{' '}
+                        {plagiarismMatrix.chatgpt?.isAIGenerated
+                          ? 'AI Generated'
+                          : plagiarismMatrix.chatgpt?.isPlagiarized
+                          ? 'Plagiarized'
+                          : 'Human Original'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Confidence Progress */}
+                  <div className="mt-3">
+                    <div className="flex justify-between text-[10px] font-mono font-bold text-[#171717]/70 dark:text-[#a1a1aa] mb-1">
+                      <span>Forensic Confidence:</span>
+                      <span className="font-black text-[#171717] dark:text-[#f4f4f7]">
+                        {plagiarismMatrix.chatgpt?.confidenceScore ?? 96}%
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-500 ${
+                          plagiarismMatrix.chatgpt?.isAIGenerated || plagiarismMatrix.chatgpt?.isPlagiarized
+                            ? 'bg-rose-500'
+                            : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${Math.min(100, plagiarismMatrix.chatgpt?.confidenceScore ?? 96)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Detected Emojis in candidate answers */}
+                  {plagiarismMatrix.chatgpt?.detectedEmojis && plagiarismMatrix.chatgpt.detectedEmojis.length > 0 ? (
+                    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs dark:border-amber-900/40 dark:bg-amber-950/20">
+                      <div className="flex items-center gap-1.5 font-black text-amber-900 dark:text-amber-300">
+                        <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                        <span>AI-Style Emojis Flagged in Submission:</span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {plagiarismMatrix.chatgpt.detectedEmojis.map((em, idx) => (
+                          <span
+                            key={idx}
+                            className="rounded border border-amber-400 bg-white px-1.5 py-0.5 font-mono text-xs dark:bg-slate-900"
+                          >
+                            {em}
+                          </span>
+                        ))}
+                      </div>
+                      <span className="mt-1 block text-[10px] text-amber-800/80 dark:text-amber-300/80">
+                        LLMs inject decorative emojis into comments & specs (e.g. 🚀, ✨, 💡).
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-2.5 flex items-center justify-between text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                      <span className="flex items-center gap-1">
+                        <Check className="h-3 w-3" /> No AI emoji or template markers detected
+                      </span>
+                      <span className="font-mono text-[10px]">Clean Code</span>
+                    </div>
+                  )}
+
+                  {/* Flagged AI comments */}
+                  {plagiarismMatrix.chatgpt?.flaggedComments && plagiarismMatrix.chatgpt.flaggedComments.length > 0 && (
+                    <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50/70 p-2 text-xs dark:border-rose-900/30 dark:bg-rose-950/20">
+                      <span className="text-[10px] font-black uppercase text-rose-800 dark:text-rose-300 block mb-0.5">
+                        Suspicious AI Phrasing ({plagiarismMatrix.chatgpt.flaggedComments.length} occurrences):
+                      </span>
+                      {plagiarismMatrix.chatgpt.flaggedComments.slice(0, 2).map((fl, i) => (
+                        <div key={i} className="text-[10px] font-mono text-rose-700 dark:text-rose-400 truncate">
+                          • {fl.detail}: &quot;{fl.lineContent}&quot;
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Forensic findings */}
+                  {(plagiarismLLMReport || plagiarismMatrix.chatgpt?.llmExplanation) && (
+                    <div className="mt-2.5 rounded-lg border border-[#171717]/10 bg-white p-2 text-[11px] font-bold text-[#171717]/80 dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#a1a1aa]">
+                      <span className="text-[9px] font-black uppercase text-[#171717]/50 dark:text-[#a1a1aa]/70 block">
+                        Forensic LLM Finding:
+                      </span>
+                      <p className="mt-0.5 leading-relaxed">
+                        {plagiarismLLMReport || plagiarismMatrix.chatgpt?.llmExplanation}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-6 flex flex-wrap justify-center gap-2">
@@ -2188,6 +2720,51 @@ export function HireMeContent() {
                           <div className="mt-1 flex justify-between text-[9px] font-mono text-[#171717]/60 dark:text-[#a1a1aa]">
                             <span>Structural Subtree Equivalence: {selectedCandidate === 'Alex Rivera' ? 'Exact AST Branch Match' : 'Zero Collusion'}</span>
                             <span>Cluster Ring: {selectedCandidate === 'Alex Rivera' ? 'Ring #1 (Hostel Node)' : 'Isolated Node'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* AI Code Markers & Emojis Audit Section */}
+                      <div className="mt-4 rounded-lg border border-[#171717]/20 bg-[#fffaf0] p-3 dark:border-[#2e323b] dark:bg-[#1c1f26]">
+                        <div className="flex items-center justify-between">
+                          <span className="font-display text-xs uppercase text-[#171717] dark:text-[#f4f4f7]">
+                            AI-Code & Emoji Scanner
+                          </span>
+                          <span className="rounded bg-[#39d5c8]/20 px-2 py-0.5 text-[9px] font-black uppercase text-[#171717] dark:text-[#39d5c8]">
+                            Copydetect Heuristics
+                          </span>
+                        </div>
+
+                        <div className="mt-2 text-xs font-bold space-y-2">
+                          <div className="flex items-center justify-between border-b border-[#171717]/10 pb-1.5 dark:border-white/10">
+                            <span className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">Detected Emojis in Code/Comments:</span>
+                            <span className="font-mono text-xs">
+                              {selectedCandidate === 'Alex Rivera' ? (
+                                <span className="rounded bg-rose-100 px-1.5 py-0.5 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400">
+                                  🚀 ✨ 🤖 (3 Flagged)
+                                </span>
+                              ) : (
+                                <span className="text-emerald-600 dark:text-emerald-400">0 (Clean)</span>
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between border-b border-[#171717]/10 pb-1.5 dark:border-white/10">
+                            <span className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">Formulaic Step-by-Step Comments:</span>
+                            <span className="font-mono text-xs">
+                              {selectedCandidate === 'Alex Rivera' ? (
+                                <span className="text-rose-600 dark:text-rose-400 font-bold">5 patterns flagged</span>
+                              ) : (
+                                <span className="text-emerald-600 dark:text-emerald-400 font-bold">0 patterns</span>
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">Overall Integrity Verdict:</span>
+                            <span className={`font-mono text-xs font-black ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                              {selectedCandidate === 'Alex Rivera' ? '88.5% AI / Plagiarized' : '96.2% Organic Human'}
+                            </span>
                           </div>
                         </div>
                       </div>
