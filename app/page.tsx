@@ -11,7 +11,7 @@ const questions = ['Multiple choice', 'Written response', 'SQL challenge', 'Debu
 const players = [{ name: 'Maya Chen', initials: 'MC', color: 'bg-cyan-400', score: 840, status: 'Solving' }, { name: 'Alex Rivera', initials: 'AR', color: 'bg-amber-300', score: 790, status: 'Reviewing' }, { name: 'You', initials: 'YO', color: 'bg-fuchsia-400', score: 720, status: 'Coding' }]
 
 export default function Home() {
-  const [view, setView] = useState<View>('auth')
+  const [view, setView] = useState<View>('home')
   const [light, setLight] = useState(false)
   const [question, setQuestion] = useState(0)
   const [paused, setPaused] = useState(false)
