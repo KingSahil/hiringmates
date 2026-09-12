@@ -75,13 +75,88 @@ export async function processNext(workerFn) {
   }
 }
 `)
-  const [chatMessages, setChatMessages] = useState<{ body: string; user_id: string; sender?: string }[]>([
-    { body: 'Maya: Splitting the test runner edge cases!', user_id: '1', sender: 'Maya' },
-    { body: 'Alex: Realtime presence connected. Ready to ship.', user_id: '2', sender: 'Alex' },
-  ])
+  const [currentUser, setCurrentUser] = useState<{ id: string; name: string }>({
+    id: 'guest',
+    name: 'Player',
+  })
+  const [chatMessages, setChatMessages] = useState<{ body: string; user_id: string; sender: string }[]>([])
   const [chatInput, setChatInput] = useState('')
-  const [onlineCount, setOnlineCount] = useState(3)
+  const [onlineCount, setOnlineCount] = useState(1)
   const [testScore, setTestScore] = useState<number | null>(null)
+  const [roster, setRoster] = useState<{ id: string; name: string; color: string; isHost?: boolean }[]>([])
+
+  const ROSTER_COLORS = ['bg-[#ffd84d]', 'bg-[#39d5c8]', 'bg-[#ff57ce]', 'bg-[#6d73ff]', 'bg-[#ff6b6b]', 'bg-[#51cf66]']
+
+  // Fetch real authenticated user identity
+  useEffect(() => {
+    const fetchUser = async () => {
+      const supabase = getSupabaseBrowserClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        let name =
+          user.user_metadata?.display_name ||
+          user.user_metadata?.full_name ||
+          user.user_metadata?.user_name ||
+          user.email?.split('@')[0]
+
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('display_name')
+            .eq('id', user.id)
+            .maybeSingle()
+          if (profile?.display_name) {
+            name = profile.display_name
+          }
+        } catch {
+          // ignore
+        }
+
+        const realName = name || 'Player'
+        setCurrentUser({ id: user.id, name: realName })
+      }
+    }
+    fetchUser()
+  }, [])
+
+  // Sync initial roster with current user
+  useEffect(() => {
+    setRoster([
+      {
+        id: currentUser.id,
+        name: `${currentUser.name} (You)`,
+        color: ROSTER_COLORS[0],
+        isHost: activeRoom ? activeRoom.host_id === currentUser.id : true,
+      },
+    ])
+  }, [currentUser, activeRoom])
+
+  // Load real chat messages for room
+  useEffect(() => {
+    if (!activeRoom?.id || (view !== 'lobby' && view !== 'game')) return
+
+    const loadChat = async () => {
+      if (activeRoom.id.startsWith('room-') || activeRoom.id === 'demo-session') return
+      const supabase = getSupabaseBrowserClient()
+      const { data, error } = await supabase
+        .from('messages')
+        .select('id, body, user_id, profiles(display_name)')
+        .eq('room_id', activeRoom.id)
+        .order('created_at', { ascending: true })
+
+      if (!error && data) {
+        setChatMessages(
+          data.map((m: any) => ({
+            body: m.body,
+            user_id: m.user_id,
+            sender: m.profiles?.display_name || (m.user_id === currentUser.id ? currentUser.name : 'Player'),
+          }))
+        )
+      }
+    }
+
+    loadChat()
+  }, [activeRoom?.id, view, currentUser.id, currentUser.name])
 
   // Load rooms
   const loadRooms = async () => {
@@ -187,31 +262,72 @@ export async function processNext(workerFn) {
 
   useEffect(() => {
     if (view !== 'lobby' && view !== 'game') return
+    const presenceKey = currentUser.id !== 'guest' ? currentUser.id : crypto.randomUUID()
     const channel = supabase.channel(`room-presence:${activeRoomId}`, {
-      config: { presence: { key: crypto.randomUUID() }, broadcast: { self: false } },
+      config: { presence: { key: presenceKey }, broadcast: { self: false } },
     })
 
+    const syncRoster = () => {
+      const state = channel.presenceState()
+      const seen = new Set<string>()
+      const list: { id: string; name: string; color: string; isHost?: boolean }[] = []
+
+      Object.values(state).forEach((presences: any) => {
+        if (Array.isArray(presences)) {
+          presences.forEach((p) => {
+            const pId = p.user_id || 'player'
+            if (!seen.has(pId)) {
+              seen.add(pId)
+              const isSelf = pId === currentUser.id
+              const displayName = p.name || (isSelf ? currentUser.name : 'Player')
+              list.push({
+                id: pId,
+                name: isSelf ? `${displayName} (You)` : displayName,
+                color: ROSTER_COLORS[list.length % ROSTER_COLORS.length],
+                isHost: activeRoom ? activeRoom.host_id === pId : list.length === 0,
+              })
+            }
+          })
+        }
+      })
+
+      if (!seen.has(currentUser.id)) {
+        list.unshift({
+          id: currentUser.id,
+          name: `${currentUser.name} (You)`,
+          color: ROSTER_COLORS[0],
+          isHost: activeRoom ? activeRoom.host_id === currentUser.id : true,
+        })
+      }
+
+      setRoster(list)
+      setOnlineCount(Math.max(1, list.length))
+    }
+
     channel
-      .on('broadcast', { event: 'code-sync' }, ({ payload }) => {
+      .on('broadcast', { event: 'code-sync' }, ({ payload }: any) => {
         if (payload?.code) setCode(payload.code)
       })
-      .on('broadcast', { event: 'chat-msg' }, ({ payload }) => {
-        if (payload) setChatMessages((prev) => [...prev, payload])
+      .on('broadcast', { event: 'chat-msg' }, ({ payload }: any) => {
+        if (payload && payload.body) setChatMessages((prev) => [...prev, payload])
       })
-      .on('presence', { event: 'sync' }, () => {
-        const count = Object.keys(channel.presenceState()).length
-        if (count > 0) setOnlineCount(count)
-      })
-      .subscribe(async (status) => {
+      .on('presence', { event: 'sync' }, syncRoster)
+      .on('presence', { event: 'join' }, syncRoster)
+      .on('presence', { event: 'leave' }, syncRoster)
+      .subscribe(async (status: string) => {
         if (status === 'SUBSCRIBED') {
-          await channel.track({ online_at: new Date().toISOString() })
+          await channel.track({
+            user_id: currentUser.id,
+            name: currentUser.name,
+            online_at: new Date().toISOString(),
+          })
         }
       })
 
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [view, activeRoomId, supabase])
+  }, [view, activeRoomId, supabase, currentUser, activeRoom])
 
   const handleCodeChange = (newVal?: string) => {
     const val = newVal ?? ''
@@ -223,16 +339,34 @@ export async function processNext(workerFn) {
     })
   }
 
-  const handleSendMessage = () => {
-    if (!chatInput.trim()) return
-    const newMsg = { body: chatInput.trim(), user_id: 'me', sender: 'You' }
+  const handleSendMessage = async () => {
+    const text = chatInput.trim()
+    if (!text) return
+    const newMsg = {
+      body: text,
+      user_id: currentUser.id,
+      sender: currentUser.name,
+    }
     setChatMessages((prev) => [...prev, newMsg])
+    setChatInput('')
+
     supabase.channel(`room-presence:${activeRoomId}`).send({
       type: 'broadcast',
       event: 'chat-msg',
       payload: newMsg,
     })
-    setChatInput('')
+
+    if (activeRoom?.id && !activeRoom.id.startsWith('room-') && currentUser.id !== 'guest') {
+      try {
+        await supabase.from('messages').insert({
+          room_id: activeRoom.id,
+          user_id: currentUser.id,
+          body: text,
+        })
+      } catch (err) {
+        console.error('Failed to persist message:', err)
+      }
+    }
   }
 
   const handleCopyCode = async () => {
@@ -475,25 +609,21 @@ export async function processNext(workerFn) {
                     Connected Players
                   </h4>
                   <div className="space-y-2">
-                    {[
-                      { name: 'You (Host)', tag: 'READY', color: 'bg-[#ffd84d]' },
-                      { name: 'Maya Chen', tag: 'READY', color: 'bg-[#39d5c8]' },
-                      { name: 'Alex Rivera', tag: 'CONNECTING', color: 'bg-[#ff57ce]' },
-                    ].map((player) => (
+                    {roster.map((player) => (
                       <div
-                        key={player.name}
+                        key={player.id}
                         className="flex items-center justify-between rounded-xl border border-[#171717] bg-[#fffaf0] p-2.5 text-xs font-bold text-[#171717] shadow-[1px_1px_0_#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7] dark:shadow-[1px_1px_0_#000000]"
                       >
                         <div className="flex items-center gap-2">
                           <span
                             className={`flex h-6 w-6 items-center justify-center rounded border border-[#171717] text-[10px] font-black text-[#171717] dark:border-[#000000] ${player.color}`}
                           >
-                            {player.name.slice(0, 2).toUpperCase()}
+                            {player.name.replace(' (You)', '').slice(0, 2).toUpperCase()}
                           </span>
                           <span>{player.name}</span>
                         </div>
                         <span className="rounded bg-white px-1.5 py-0.5 text-[9px] font-black text-[#171717] dark:bg-[#111317] dark:text-[#f4f4f7]">
-                          {player.tag}
+                          {player.isHost ? 'HOST' : 'READY'}
                         </span>
                       </div>
                     ))}
@@ -581,19 +711,15 @@ export async function processNext(workerFn) {
                   Roster
                 </div>
                 <div className="space-y-1.5">
-                  {[
-                    { name: 'You (Coding)', color: 'bg-[#ffd84d]' },
-                    { name: 'Maya Chen', color: 'bg-[#39d5c8]' },
-                    { name: 'Alex Rivera', color: 'bg-[#ff57ce]' },
-                  ].map((p) => (
+                  {roster.map((p) => (
                     <div
-                      key={p.name}
+                      key={p.id}
                       className="flex items-center gap-2 rounded-lg border border-[#171717] bg-white p-1.5 text-xs font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]"
                     >
                       <span
                         className={`flex h-5 w-5 items-center justify-center rounded text-[9px] font-black text-[#171717] dark:border-[#000000] ${p.color}`}
                       >
-                        {p.name.slice(0, 2).toUpperCase()}
+                        {p.name.replace(' (You)', '').slice(0, 2).toUpperCase()}
                       </span>
                       <span className="truncate text-[11px]">{p.name}</span>
                     </div>
@@ -656,17 +782,29 @@ export async function processNext(workerFn) {
                 </div>
 
                 <div className="flex-1 space-y-2 overflow-y-auto pr-1">
-                  {chatMessages.map((msg, idx) => (
-                    <div
-                      key={idx}
-                      className="rounded-lg border border-[#171717] bg-white p-2 text-xs font-bold dark:border-[#2e323b] dark:bg-[#15171c]"
-                    >
-                      <span className="font-black text-[#ff57ce] text-[11px]">
-                        {msg.sender ?? 'Player'}:{' '}
-                      </span>
-                      <span className="text-[#171717] text-[11px] dark:text-[#f4f4f7]">{msg.body}</span>
+                  {chatMessages.length === 0 ? (
+                    <div className="flex h-full flex-col items-center justify-center p-4 text-center">
+                      <MessageSquare className="mb-2 h-6 w-6 text-[#171717]/30 dark:text-[#a1a1aa]/30" />
+                      <p className="text-[11px] font-bold text-[#171717]/50 dark:text-[#a1a1aa]/50">
+                        No messages yet
+                      </p>
+                      <p className="text-[10px] text-[#171717]/40 dark:text-[#a1a1aa]/40">
+                        Type below to coordinate with the room!
+                      </p>
                     </div>
-                  ))}
+                  ) : (
+                    chatMessages.map((msg, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-lg border border-[#171717] bg-white p-2 text-xs font-bold dark:border-[#2e323b] dark:bg-[#15171c]"
+                      >
+                        <span className="font-black text-[#ff57ce] text-[11px]">
+                          {msg.sender ?? 'Player'}:{' '}
+                        </span>
+                        <span className="text-[#171717] text-[11px] dark:text-[#f4f4f7]">{msg.body}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 <div className="mt-2 flex gap-1">

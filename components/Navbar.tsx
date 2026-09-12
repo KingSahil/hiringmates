@@ -17,14 +17,14 @@ export function Navbar() {
     const supabase = getSupabaseBrowserClient()
 
     if (cachedEmail === undefined) {
-      supabase.auth.getSession().then(({ data }) => {
+      supabase.auth.getSession().then(({ data }: any) => {
         const email = data.session?.user?.email ?? null
         cachedEmail = email
         setUserEmail(email)
       })
     }
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
       const email = session?.user?.email ?? null
       cachedEmail = email
       setUserEmail(email)

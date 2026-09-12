@@ -19,6 +19,7 @@ import {
   Video,
 } from 'lucide-react'
 import { useNavigation } from '@/lib/navigation'
+import { getSupabaseBrowserClient } from '@/lib/supabase'
 
 type HireMeStep = 'profile' | 'invite' | 'check' | 'assessment' | 'admin' | 'results'
 
@@ -109,6 +110,43 @@ export function HireMeContent() {
 
   // Recruiter Admin state
   const [selectedCandidate, setSelectedCandidate] = useState('Maya Chen')
+
+  // Auto-populate candidate from Supabase auth session if available
+  useEffect(() => {
+    const fetchUser = async () => {
+      const supabase = getSupabaseBrowserClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        let name =
+          user.user_metadata?.display_name ||
+          user.user_metadata?.full_name ||
+          user.user_metadata?.user_name ||
+          user.email?.split('@')[0]
+
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('display_name')
+            .eq('id', user.id)
+            .maybeSingle()
+          if (profile?.display_name) {
+            name = profile.display_name
+          }
+        } catch {
+          // ignore
+        }
+
+        if (name) {
+          setCandidateName(name)
+          setSelectedCandidate(name)
+        }
+        if (user.user_metadata?.user_name) {
+          setCandidateGithub(`https://github.com/${user.user_metadata.user_name}`)
+        }
+      }
+    }
+    fetchUser()
+  }, [])
 
   useEffect(() => {
     if (step !== 'assessment' || isPaused) return

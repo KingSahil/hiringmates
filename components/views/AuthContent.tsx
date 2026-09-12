@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Mail, Lock, User, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles, Zap } from 'lucide-react'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { useNavigation } from '@/lib/navigation'
@@ -14,6 +14,16 @@ export function AuthContent() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      const err = params.get('error')
+      if (err) {
+        setError(decodeURIComponent(err))
+      }
+    }
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -264,16 +274,67 @@ export function AuthContent() {
             <ArrowRight className="h-4 w-4" />
           </button>
 
-          {mode === 'signin' && (
+          {mode !== 'forgot' && (
             <div className="pt-2 space-y-2.5">
               <div className="relative my-4 text-center">
                 <div className="absolute inset-0 flex items-center">
                   <div className="w-full border-t border-[#171717]/20 dark:border-white/10" />
                 </div>
                 <span className="relative bg-[#fffaf0] px-3 font-mono text-[10px] font-black uppercase text-[#171717]/60 dark:bg-[#15171c] dark:text-[#a1a1aa]">
-                  Alternative Sign In
+                  Or Continue With
                 </span>
               </div>
+
+              {/* GitHub OAuth Button */}
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  setSubmitting(true)
+                  setError('')
+                  setSuccess('')
+                  const supabase = getSupabaseBrowserClient()
+                  const { error: oErr } = await supabase.auth.signInWithOAuth({
+                    provider: 'github',
+                    options: {
+                      redirectTo: `${window.location.origin}/auth/callback`,
+                    },
+                  })
+                  if (oErr) {
+                    setError(oErr.message || 'GitHub sign-in is not enabled in Supabase yet.')
+                    setSubmitting(false)
+                  }
+                }}
+                className="flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-2xl border-2 border-[#171717] bg-[#24292e] py-3 text-xs font-black uppercase text-white shadow-[2px_2px_0_#171717] transition hover:bg-[#1b1f23] hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60 dark:border-[#2e323b] dark:bg-[#161b22] dark:shadow-[2px_2px_0_#000000]"
+              >
+                <svg className="h-4 w-4 fill-current" viewBox="0 0 24 24">
+                  <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+                </svg>
+                Continue with GitHub
+              </button>
+
+              {/* Google OAuth Button */}
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  setSubmitting(true)
+                  setError('')
+                  setSuccess('')
+                  const supabase = getSupabaseBrowserClient()
+                  const { error: oErr } = await supabase.auth.signInWithOAuth({
+                    provider: 'google',
+                    options: { redirectTo: `${window.location.origin}/auth/callback` },
+                  })
+                  if (oErr) {
+                    setError(oErr.message || 'Google sign-in is not configured yet in Supabase Auth.')
+                    setSubmitting(false)
+                  }
+                }}
+                className="flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-2xl border-2 border-[#171717] bg-white py-3 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:bg-neutral-50 hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60 dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7] dark:shadow-[2px_2px_0_#000000]"
+              >
+                <span className="font-black text-[#4285f4]">G</span> Continue with Google
+              </button>
 
               {/* Demo Account Button */}
               <button
@@ -291,35 +352,13 @@ export function AuthContent() {
                     setSuccess('Signed in with Instant Demo Player!')
                     setTimeout(() => setTab('codemates'), 600)
                   } else {
-                    setError('Demo anonymous sign in disabled in Supabase. You can sign in with your email/password above.')
+                    setError('Demo anonymous sign in disabled in Supabase. You can sign in with your email/password or GitHub above.')
                   }
                   setSubmitting(false)
                 }}
                 className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[#171717] bg-[#ffd84d] py-3 text-xs font-black uppercase text-[#171717] shadow-sm transition hover:bg-[#ffe37e] dark:border-[#2e323b]"
               >
                 <Zap className="h-4 w-4 fill-current" /> Use Instant Demo Account
-              </button>
-
-              {/* Google OAuth Button */}
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={async () => {
-                  setSubmitting(true)
-                  setError('')
-                  const supabase = getSupabaseBrowserClient()
-                  const { error: oErr } = await supabase.auth.signInWithOAuth({
-                    provider: 'google',
-                    options: { redirectTo: `${window.location.origin}/auth/callback` },
-                  })
-                  if (oErr) {
-                    setError('Google sign-in is not configured yet in Supabase Auth.')
-                    setSubmitting(false)
-                  }
-                }}
-                className="flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-2xl border-2 border-[#171717] bg-white py-3 text-xs font-black uppercase text-[#171717] shadow-sm transition hover:bg-neutral-50 dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7]"
-              >
-                <span className="font-black text-[#4285f4]">G</span> Continue with Google
               </button>
             </div>
           )}
