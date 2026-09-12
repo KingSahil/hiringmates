@@ -179,6 +179,19 @@ class Grade(BaseModel):
     mcq_total: int = 0
 
 
+class SkillTag(BaseModel):
+    """
+    An inferred skill, with the evidence behind it.
+
+    A bare tag is not defensible if a candidate contests it, so confidence and
+    evidence travel with it.
+    """
+
+    name: str
+    confidence: str = "medium"
+    evidence: list[str] = Field(default_factory=list)
+
+
 class EnhancedProfile(BaseModel):
     """The durable artifact. Outlives the extraction cache TTL."""
 
@@ -189,6 +202,7 @@ class EnhancedProfile(BaseModel):
     theory_elapsed_seconds: float | None = None
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
+    skills: list[SkillTag] = Field(default_factory=list)
     questions_served: list[Question] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
 

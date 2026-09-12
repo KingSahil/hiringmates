@@ -36,6 +36,7 @@ from rag.models import (
     RawQuestionSet,
     RoughProfile,
     Session,
+    SkillTag,
     utcnow,
 )
 from rag.scenarios import DEFAULT_SCENARIO, Scenario, get_scenario
@@ -237,6 +238,7 @@ class Pipeline:
             theory_elapsed_seconds=elapsed,
             summary=grade.verdict,
             tags=self._tags(session),
+            skills=self._skills(session),
             questions_served=list(session.question_set.questions)
             if session.question_set else [],
         )
@@ -300,10 +302,17 @@ class Pipeline:
         return graded
 
     @staticmethod
-    def _tags(session: Session) -> list[str]:
+    def _tag_block(session: Session) -> dict[str, Any]:
         output = session.extraction.detector_output if session.extraction else {}
-        tags = output.get("tags") or {}
-        return list(tags.get("all") or [])
+        return output.get("tags") or {}
+
+    def _tags(self, session: Session) -> list[str]:
+        return list(self._tag_block(session).get("all") or [])
+
+    def _skills(self, session: Session) -> list[SkillTag]:
+        """Inferred skills with their evidence, so each tag can be defended."""
+        raw = self._tag_block(session).get("skills") or []
+        return [SkillTag.model_validate(item) for item in raw]
 
     def _render(self, instruction: str, session: Session) -> str:
         output = session.extraction.detector_output if session.extraction else {}

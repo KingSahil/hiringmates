@@ -20,10 +20,17 @@ interface RoughProfile {
   evidence: string[]
 }
 
+interface SkillTag {
+  name: string
+  confidence: string
+  evidence: string[]
+}
+
 interface Enhanced {
   summary: string
   theory_elapsed_seconds: number | null
   tags: string[]
+  skills: SkillTag[]
   grade: {
     criteria: { criterion: string; score: number; evidence: string }[]
     total: number
@@ -49,6 +56,7 @@ const POLL_MS = 2000
 
 export function AssessmentContent() {
   const [signedIn, setSignedIn] = useState<boolean | null>(null)
+  const [saved, setSaved] = useState<Enhanced | null>(null)
   const [session, setSession] = useState<SessionView | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -63,6 +71,28 @@ export function AssessmentContent() {
     )
     return () => listener.subscription.unsubscribe()
   }, [])
+
+  // Returning candidate: load the durable profile. It outlives the extraction
+  // cache TTL, so show it instead of silently asking them to start again.
+  useEffect(() => {
+    if (!signedIn) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/onboarding/profile')
+        if (res.status === 204) return
+        if (res.ok) {
+          const data = await res.json()
+          if (!cancelled) setSaved(data)
+        }
+      } catch {
+        /* no saved profile or backend unreachable: fall back to the start view */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [signedIn])
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
