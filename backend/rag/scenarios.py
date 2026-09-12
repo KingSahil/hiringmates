@@ -101,7 +101,16 @@ CANDIDATE_ONBOARDING = Scenario(
         "Theory: EASY and open-ended. It should be answerable in a few "
         "sentences by anyone with the experience the profile claims. Its "
         "purpose is to confirm the profile, not to filter.\n\n"
-        "Avoid anything already covered by the supplied recent questions."
+        "Avoid anything already covered by the supplied recent questions.\n\n"
+        "Return JSON in EXACTLY this shape and no other keys. Do not add ids "
+        "or type fields - those are assigned for you:\n"
+        "{{\n"
+        '  "mcqs": [\n'
+        '    {{ "prompt": "...", "options": ["...", "...", "...", "..."], '
+        '"correct_index": 0 }}\n'
+        "  ],\n"
+        '  "theory": {{ "prompt": "..." }}\n'
+        "}}"
     ),
     grading_instruction=(
         "Grade this candidate's assessment.\n\n"

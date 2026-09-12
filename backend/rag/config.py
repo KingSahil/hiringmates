@@ -93,6 +93,12 @@ class Settings:
     # --- Detector ---
     detector_cli: str = DETECTOR_CLI
     detector_timeout_seconds: float = 180.0
+    # Interpreter used to run the detector CLI. Blank means "the same
+    # interpreter as this process". The detector needs `requests` and
+    # `python-dotenv`; if they are not installed alongside the backend, point
+    # this at an interpreter that has them (e.g. the detector's own venv).
+    detector_python: str = field(
+        default_factory=lambda: os.getenv("DETECTOR_PYTHON", ""))
 
     def validate(self) -> list[str]:
         """

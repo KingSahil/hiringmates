@@ -26,17 +26,16 @@ PROFILE = {
     "evidence": ["Python at 85% of code"],
 }
 
+# The wire shape the model returns: no ids or kinds, those are assigned in code.
+# Produces q1..q3 as mcq and q4 as theory.
 QUESTIONS = {
-    "questions": [
-        {"id": "q1", "kind": "mcq", "prompt": "Why ASGI?",
-         "options": ["a", "b", "c", "d"], "correct_index": 1},
-        {"id": "q2", "kind": "mcq", "prompt": "Docker layers?",
-         "options": ["a", "b", "c", "d"], "correct_index": 0},
-        {"id": "q3", "kind": "mcq", "prompt": "CI gating?",
-         "options": ["a", "b", "c", "d"], "correct_index": 2},
-        {"id": "q4", "kind": "theory", "prompt": "Describe a service you built.",
-         "options": [], "correct_index": None},
-    ]
+    "mcqs": [
+        {"prompt": "Why ASGI?", "options": ["a", "b", "c", "d"], "correct_index": 1},
+        {"prompt": "Docker layers?", "options": ["a", "b", "c", "d"],
+         "correct_index": 0},
+        {"prompt": "CI gating?", "options": ["a", "b", "c", "d"], "correct_index": 2},
+    ],
+    "theory": {"prompt": "Describe a service you built."},
 }
 
 GRADE = {
@@ -243,9 +242,8 @@ class TestFailureModes:
     def test_unusable_questions_fail_the_session(self):
         llm = FakeLLM(responses={
             "Write a rough profile": PROFILE,
-            "Generate a short assessment": {"questions": [
-                {"id": "q1", "kind": "mcq", "prompt": "x",
-                 "options": ["a"], "correct_index": 0}]},
+            "Generate a short assessment": {"mcqs": [
+                {"prompt": "x", "options": ["a"], "correct_index": 0}]},
         })
         pipeline = Pipeline(llm, MemoryStore(), FakeDetector(DETECTOR_PAYLOAD))
         session = pipeline.advance(pipeline.create_session(make_identity()).id)

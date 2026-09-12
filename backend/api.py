@@ -24,6 +24,7 @@ this module is written but unverified at runtime.
 from __future__ import annotations
 
 import logging
+import threading
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -58,16 +59,38 @@ def _store(settings) -> Store:
     return MemoryStore()
 
 
+_pipeline_singleton: Pipeline | None = None
+_pipeline_lock = threading.Lock()
+
+
 def _pipeline() -> Pipeline:
-    settings = load_settings()
-    llm: LLMClient = build_llm(settings)
-    return Pipeline(
-        llm=llm,
-        store=_store(settings),
-        detector=SubprocessDetector(settings.detector_cli,
-                                    timeout=settings.detector_timeout_seconds),
-        ttl_days=settings.extraction_ttl_days,
-    )
+    """
+    Build the pipeline once and reuse it.
+
+    This MUST be a singleton. Originally it was constructed per request, which
+    meant the in-memory store was thrown away after every call: POST /sessions
+    wrote the session to a store that no longer existed by the time the client
+    polled, and every GET returned 404. A Supabase-backed store would have
+    masked the bug, which is exactly why it survived testing.
+
+    Settings are read on first use; restart the service after changing them.
+    """
+    global _pipeline_singleton
+    with _pipeline_lock:
+        if _pipeline_singleton is None:
+            settings = load_settings()
+            llm: LLMClient = build_llm(settings)
+            _pipeline_singleton = Pipeline(
+                llm=llm,
+                store=_store(settings),
+                detector=SubprocessDetector(
+                    settings.detector_cli,
+                    python=settings.detector_python or None,
+                    timeout=settings.detector_timeout_seconds,
+                ),
+                ttl_days=settings.extraction_ttl_days,
+            )
+        return _pipeline_singleton
 
 
 @app.get("/health")
@@ -93,10 +116,12 @@ def create_session(request: CreateSessionRequest,
 @app.get("/sessions/{session_id}")
 def get_session(session_id: str) -> dict:
     pipeline = _pipeline()
-    try:
-        return _view(pipeline.store.get_session(session_id))
-    except KeyError:
-        raise HTTPException(status_code=404, detail="session not found") from None
+    # The store returns None for an unknown id; it does not raise. Check it
+    # before building the view, or this becomes a 500 instead of a 404.
+    session = pipeline.store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return _view(session)
 
 
 @app.post("/sessions/{session_id}/answers")

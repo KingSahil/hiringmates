@@ -89,6 +89,53 @@ class Question(BaseModel):
         return bool(self.prompt.strip())
 
 
+class RawQuestion(BaseModel):
+    """Content only — no identity, no typing."""
+
+    prompt: str
+    options: list[str] = Field(default_factory=list)
+    correct_index: int | None = None
+
+
+class RawQuestionSet(BaseModel):
+    """
+    The shape the model is asked to produce.
+
+    Deliberately carries no `id` or `kind`: identity and typing are assigned
+    by the code, deterministically. Asking the model to invent them gives it
+    another way to be wrong — it previously returned
+    `multiple_choice_questions` / `theory_question` with a `question` field,
+    which validated to zero usable questions.
+
+    Uses `RawQuestion`, not `Question`, because `Question` requires `id` and
+    `kind`; parsing the raw payload straight into it fails validation.
+    """
+
+    mcqs: list[RawQuestion] = Field(default_factory=list)
+    theory: RawQuestion | None = None
+
+    def to_question_set(self) -> "QuestionSet":
+        questions: list[Question] = [
+            Question(
+                id=f"q{i}",
+                kind="mcq",
+                prompt=q.prompt,
+                options=q.options,
+                correct_index=q.correct_index,
+            )
+            for i, q in enumerate(self.mcqs, start=1)
+        ]
+        if self.theory is not None:
+            questions.append(
+                Question(
+                    id=f"q{len(self.mcqs) + 1}",
+                    kind="theory",
+                    prompt=self.theory.prompt,
+                )
+            )
+        return QuestionSet(questions=questions)
+
+
 class QuestionSet(BaseModel):
     questions: list[Question] = Field(default_factory=list)
 
@@ -112,7 +159,9 @@ class Answer(BaseModel):
 
 class CriterionScore(BaseModel):
     criterion: str
-    score: int = Field(ge=0, le=5)
+    # Float, not int: models reliably return fractional rubric scores (3.5).
+    # Rejecting those fails the whole grade over a type that carries no meaning.
+    score: float = Field(ge=0, le=5)
     evidence: str = ""
 
 

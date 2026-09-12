@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Zap, LogIn, LogOut, Sun, Moon } from 'lucide-react'
+import { Zap, LogIn, LogOut, Sun, Moon, ClipboardList } from 'lucide-react'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useTheme } from '@/lib/theme'
@@ -89,6 +89,15 @@ export function Navbar() {
 
           {userEmail ? (
             <div className="flex items-center gap-2">
+              <a
+                href="/assessment"
+                onClick={(e) => navigateTo('assessment', e)}
+                className="flex cursor-pointer items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-[#ffd84d] px-2.5 py-1 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:bg-[#f5c518] dark:border-[#2e323b] dark:shadow-[2px_2px_0_#000000]"
+                title="Candidate assessment"
+              >
+                <ClipboardList className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Assessment</span>
+              </a>
               <div className="flex items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-white px-2.5 py-1 shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:shadow-[2px_2px_0_#000000]">
                 <div className="flex h-5 w-5 items-center justify-center rounded-full border border-[#171717] bg-[#ffd84d] text-[9px] font-black text-[#171717]">
                   {userEmail.slice(0, 1).toUpperCase()}

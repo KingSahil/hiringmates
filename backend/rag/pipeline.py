@@ -33,6 +33,7 @@ from rag.models import (
     Identity,
     Question,
     QuestionSet,
+    RawQuestionSet,
     RoughProfile,
     Session,
     utcnow,
@@ -184,15 +185,16 @@ class Pipeline:
             mcq=scenario.mcq_count, theory=scenario.theory_count,
         )
         try:
-            question_set = self.llm.complete_model(
+            raw = self.llm.complete_model(
                 scenario.full_system_prompt,
                 self._render(instruction, session),
-                QuestionSet,
+                RawQuestionSet,
             )
         except LLMError as e:
             session.status = "failed"
             session.error = f"question generation failed: {e}"
             return
+        question_set = raw.to_question_set()
 
         valid = [q for q in question_set.questions if q.is_valid()]
         if len(valid) < scenario.mcq_count + scenario.theory_count:
