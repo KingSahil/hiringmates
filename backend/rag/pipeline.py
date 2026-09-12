@@ -385,6 +385,8 @@ class Pipeline:
             f"{instruction}\n\n"
             f"--- GitHub report (JSON) ---\n{json.dumps(output, default=str)[:12000]}\n"
             f"--- Rough profile (JSON) ---\n{json.dumps(profile, default=str)}\n"
+            f"--- Candidate intake (JSON) ---\n"
+            f"{json.dumps(session.intake, default=str) or '{}'}\n"
             f"--- Recently served questions (avoid repeating) ---\n"
             f"{chr(10).join('- ' + p for p in recent) or '(none)'}\n"
         )

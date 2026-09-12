@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Play, Loader2, AlertTriangle, CheckCircle2, Clock } from 'lucide-react'
+import { IntakeForm } from '@/components/views/IntakeForm'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 
 interface Question {
@@ -68,6 +69,7 @@ export function AssessmentContent() {
   // Per-question countdown for MCQs only. Theory questions are unlimited.
   const [timeLeft, setTimeLeft] = useState<Record<string, number>>({})
   const [expired, setExpired] = useState<Record<string, boolean>>({})
+  const [intakeDone, setIntakeDone] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [answers, setAnswers] = useState<Record<string, { index?: number; text?: string }>>({})
@@ -172,6 +174,20 @@ export function AssessmentContent() {
       setError('Could not reach the onboarding API.')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const submitIntake = async (answers: Record<string, string>) => {
+    setIntakeDone(true)
+    if (!session) return
+    try {
+      await fetch('/api/onboarding/intake', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: session.id, answers }),
+      })
+    } catch {
+      /* intake is context, never a gate — a failure must not block the flow */
     }
   }
 
@@ -291,6 +307,10 @@ export function AssessmentContent() {
           </p>
         )}
       </div>
+
+      {session && (session.status === 'pending' || session.status === 'extracting') && !intakeDone && (
+        <IntakeForm onSubmit={submitIntake} />
+      )}
 
       {session?.rough_profile && (
         <div className={card}>

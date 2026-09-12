@@ -230,6 +230,9 @@ class Session(BaseModel):
     question_set: QuestionSet | None = None
     served_at: datetime | None = None
     answers: list[Answer] = Field(default_factory=list)
+    # Intake form answers, captured while extraction/profiling run. May be empty
+    # if the candidate submits before the questions are generated.
+    intake: dict[str, Any] = Field(default_factory=dict)
     # Populated by the background clone step after questions are served.
     cloned: list[dict[str, Any]] = Field(default_factory=list)
     enhanced: EnhancedProfile | None = None
