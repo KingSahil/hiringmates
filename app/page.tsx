@@ -3,9 +3,10 @@
 import Editor from '@monaco-editor/react'
 import { useEffect, useState } from 'react'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
+import { AuthPage, MultiplayerGame, RealLobby, RealRooms } from '@/app/multiplayer'
 import { ArrowLeft, ArrowRight, Bell, Check, ClipboardCheck, Code2, Copy, Gamepad2, LockKeyhole, Play, Plus, Radio, Send, ShieldCheck, Timer, Trophy, Users, Video, Wifi, X, Zap } from 'lucide-react'
 
-type View = 'home' | 'profile' | 'hireme' | 'admin' | 'check' | 'assessment' | 'codemates' | 'codemates-brief' | 'codemates-check' | 'rooms' | 'lobby' | 'game' | 'results'
+type View = 'home' | 'auth' | 'profile' | 'hireme' | 'admin' | 'check' | 'assessment' | 'codemates' | 'codemates-brief' | 'codemates-check' | 'rooms' | 'lobby' | 'game' | 'results'
 const questions = ['Multiple choice', 'Written response', 'SQL challenge', 'Debugging']
 const players = [{ name: 'Maya Chen', initials: 'MC', color: 'bg-cyan-400', score: 840, status: 'Solving' }, { name: 'Alex Rivera', initials: 'AR', color: 'bg-amber-300', score: 790, status: 'Reviewing' }, { name: 'You', initials: 'YO', color: 'bg-fuchsia-400', score: 720, status: 'Coding' }]
 
@@ -18,6 +19,7 @@ export default function Home() {
   const [chat, setChat] = useState('')
   const [messages, setMessages] = useState(['Maya: Let’s split the edge cases.', 'Alex: I’ll check the test runner.'])
   const [roomCode, setRoomCode] = useState('ASYNC-77')
+  const [activeRoom, setActiveRoom] = useState<any>(null)
   const [userEmail, setUserEmail] = useState<string | null>(null)
   useEffect(() => {
     const supabase = getSupabaseBrowserClient()
@@ -27,10 +29,11 @@ export default function Home() {
   }, [])
   const nav = (next: View) => { setView(next); setPaused(false) }
   const joinLobby = (code: string) => { setRoomCode(code.trim().toUpperCase() || 'ASYNC-77'); nav('lobby') }
+  const openRoom = (room: any) => { setActiveRoom(room); setRoomCode(room.code); nav('lobby') }
   const sendMessage = () => { if (!chat.trim()) return; setMessages([...messages, `You: ${chat.trim()}`]); setChat('') }
   return <main className={`min-h-screen transition-colors ${light ? 'bg-[#f4ead0] text-[#18202b]' : 'bg-[#10131d] text-[#f7f0dc]'}`}>
     {view !== 'home' && <header className="border-b-4 border-[#4d3b2b] bg-[#f4ead0] px-5 py-3 text-[#18202b]"><div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4"><button onClick={() => nav('home')} className="flex items-center gap-3 text-left"><span className="grid size-9 place-items-center border-2 border-[#4d3b2b] bg-[#e8a33a] text-[#18202b]"><Zap className="size-5 fill-current" /></span><span className="font-mono text-sm font-bold">HireMe<span className="text-[#d45b32]">.app</span></span></button><div className="flex items-center gap-2"><button onClick={() => setLight(!light)} className="border-2 border-[#4d3b2b] px-3 py-2 font-mono text-xs">{light ? 'DARK' : 'LIGHT'}</button></div></div></header>}
-    <div className="mx-auto max-w-[1440px]">{view === 'home' && <><Landing nav={nav} /><AuthPanel userEmail={userEmail} /></>}{view === 'profile' && <CandidateIntake nav={nav} />}{view === 'hireme' && <HireInvite nav={nav} />}{view === 'admin' && <AdminPortal nav={nav} />}{view === 'check' && <SystemCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'assessment' && <Assessment question={question} setQuestion={setQuestion} paused={paused} setPaused={setPaused} nav={nav} />}{view === 'codemates' && <CodeMatesHome nav={nav} joinLobby={joinLobby} />}{view === 'codemates-brief' && <CodeMatesBrief nav={nav} />}{view === 'codemates-check' && <CodeMatesCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'rooms' && <LiveRooms nav={nav} joinLobby={joinLobby} />}{view === 'lobby' && <Lobby nav={nav} roomCode={roomCode} />}{view === 'game' && <Game chat={chat} setChat={setChat} messages={messages} sendMessage={sendMessage} nav={nav} />}{view === 'results' && <Results nav={nav} />}</div>
+    <div className="mx-auto max-w-[1440px]">{view === 'home' && <><Landing nav={nav} /><div className="mx-auto mb-8 max-w-5xl text-right"><button onClick={() => nav('auth')} className="border border-[#4d3b2b] bg-[#f4ead0] px-4 py-2 font-mono text-xs text-[#18202b]">SIGN IN / CREATE ACCOUNT</button></div></>}{view === 'auth' && <AuthPage nav={nav} />}{view === 'profile' && <CandidateIntake nav={nav} />}{view === 'hireme' && <HireInvite nav={nav} />}{view === 'admin' && <AdminPortal nav={nav} />}{view === 'check' && <SystemCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'assessment' && <Assessment question={question} setQuestion={setQuestion} paused={paused} setPaused={setPaused} nav={nav} />}{view === 'codemates' && <RealRooms nav={nav} onJoin={openRoom} />}{view === 'codemates-brief' && <CodeMatesBrief nav={nav} />}{view === 'codemates-check' && <CodeMatesCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'rooms' && <RealRooms nav={nav} onJoin={openRoom} />}{view === 'lobby' && (activeRoom ? <RealLobby nav={nav} room={activeRoom} onStart={() => nav('game')} /> : <LiveRooms nav={nav} joinLobby={joinLobby} />)}{view === 'game' && (activeRoom ? <MultiplayerGame nav={nav} room={activeRoom} /> : <Game chat={chat} setChat={setChat} messages={messages} sendMessage={sendMessage} nav={nav} />)}{view === 'results' && <Results nav={nav} />}</div>
   </main>
 }
 function AuthPanel({ userEmail }: { userEmail: string | null }) {
