@@ -554,13 +554,42 @@ export function HireMeContent() {
       },
       onWarning: (count, direction) => {
         if (!isAssessment) return // During 'check' step, don't trigger penalty strikes
+
+        // ZERO TOLERANCE: Immediate cancellation for smartphone / foreign object
+        if (direction === 'FOREIGN_OBJECT') {
+          setIsTerminated(true)
+          setShowGazeWarningModal(false)
+          setShowTabWarning(false)
+          setIsPaused(true)
+          setTerminationReason(
+            'HIRING PROCESS CANCELLED: An unauthorized smartphone / foreign device was identified in the camera frame by AI Vision Proctoring. The candidate is disqualified from the hiring process.'
+          )
+          setSecurityViolations((prev) => [
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              type: 'HARDWARE_ANOMALY',
+              detail: 'CRITICAL INTEGRITY VIOLATION: Unauthorized Smartphone / Foreign Object detected in camera frame. Hiring process cancelled immediately.',
+              severity: 'CRITICAL',
+            },
+            ...prev,
+          ])
+          if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+          if (micStream) micStream.getTracks().forEach((t) => t.stop())
+          if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
+          setCameraReady(false)
+          setMicReady(false)
+          setScreenReady(false)
+          setStep('results')
+          return
+        }
+
         setGazeWarnings(count)
         setIsPaused(true)
         const friendlyDir =
           direction === 'MULTIPLE_FACES'
             ? 'MULTIPLE PEOPLE DETECTED'
-            : direction === 'FOREIGN_OBJECT'
-            ? 'FOREIGN OBJECT / PHONE DETECTED'
+            : direction === 'LOOKING_AWAY'
+            ? 'CANDIDATE FACE MISSING'
             : direction.replace('_', ' ')
         setGazeWarningDetail({ count, direction: friendlyDir })
         setShowGazeWarningModal(true)
@@ -581,6 +610,16 @@ export function HireMeContent() {
         setShowTabWarning(false)
         setIsPaused(true)
         setTerminationReason(reason)
+
+        setSecurityViolations((prev) => [
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'VOICE_DETECTED',
+            detail: `CRITICAL PROCTORING TERMINATION: ${reason}`,
+            severity: 'CRITICAL',
+          },
+          ...prev,
+        ])
 
         if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
         if (micStream) micStream.getTracks().forEach((t) => t.stop())
@@ -1421,6 +1460,19 @@ export function HireMeContent() {
               </div>
             </div>
 
+            {/* Real-time Phone / Foreign Object Warning Banner */}
+            {gazeStatus.foreignObjectDetected && (
+              <div className="mt-4 rounded-xl border-2 border-rose-500 bg-rose-50 p-3 text-xs font-bold text-rose-800 dark:border-rose-900/80 dark:bg-rose-950/50 dark:text-rose-200 animate-pulse">
+                <div className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400 font-black">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>PROHIBITED OBJECT DETECTED: {gazeStatus.landmarks?.foreignObjectLabel || 'SMARTPHONE'}</span>
+                </div>
+                <p className="mt-1 text-[11px] leading-relaxed">
+                  A smartphone or unauthorized hardware device was detected in your camera frame. Please put your phone away and clear your workspace before continuing. Having a smartphone present during the assessment will immediately terminate your session and cancel your hiring process.
+                </p>
+              </div>
+            )}
+
             <div className="mt-6 flex items-center justify-between border-t border-[#171717]/15 pt-4 dark:border-[#2e323b]">
               <button
                 onClick={() => setStep('profile')}
@@ -1429,11 +1481,19 @@ export function HireMeContent() {
                 <ArrowLeft className="h-3.5 w-3.5" /> Back
               </button>
               <button
-                disabled={!consentChecked}
+                disabled={!consentChecked || gazeStatus.foreignObjectDetected}
                 onClick={handleStartAssessment}
                 className="btn-neo btn-neo-lemon py-2 text-xs disabled:opacity-40"
               >
-                Start Assessment <Play className="h-3.5 w-3.5 fill-current" />
+                {gazeStatus.foreignObjectDetected ? (
+                  <span className="flex items-center gap-1.5 text-rose-700 dark:text-rose-300 font-black">
+                    <AlertTriangle className="h-3.5 w-3.5" /> Remove Phone to Start
+                  </span>
+                ) : (
+                  <>
+                    Start Assessment <Play className="h-3.5 w-3.5 fill-current" />
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -2007,11 +2067,17 @@ export function HireMeContent() {
             {isTerminated ? (
               <>
                 <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border-2 border-[#171717] bg-[#ff6b6b] text-white dark:border-[#000000]">
-                  <XCircle className="h-8 w-8" />
+                  {terminationReason?.includes('Foreign') || terminationReason?.includes('smartphone') || terminationReason?.includes('phone') || terminationReason?.includes('SMARTPHONE') ? (
+                    <Smartphone className="h-8 w-8" />
+                  ) : (
+                    <XCircle className="h-8 w-8" />
+                  )}
                 </div>
 
                 <h2 className="mt-4 font-display text-4xl uppercase text-rose-600 dark:text-rose-400">
-                  Session Terminated
+                  {terminationReason?.includes('Foreign') || terminationReason?.includes('smartphone') || terminationReason?.includes('phone') || terminationReason?.includes('SMARTPHONE')
+                    ? 'Hiring Process Cancelled'
+                    : 'Session Terminated'}
                 </h2>
                 <p className="mt-1 text-xs font-bold text-[#171717]/70 dark:text-[#a1a1aa]">
                   {terminationReason || 'Academic integrity violations detected. This assessment was automatically terminated.'}
@@ -2029,7 +2095,7 @@ export function HireMeContent() {
                     <div className="text-[9px] font-black uppercase text-[#171717]/60 dark:text-[#a1a1aa]">Attempted</div>
                   </div>
                   <div className="rounded-xl border border-rose-400 bg-[#ffe6f8] p-3 dark:border-rose-900 dark:bg-rose-950/50">
-                    <div className="font-display text-2xl text-rose-600 dark:text-rose-400">TERMINATED</div>
+                    <div className="font-display text-2xl text-rose-600 dark:text-rose-400">DISQUALIFIED</div>
                     <div className="text-[9px] font-black uppercase text-rose-700 dark:text-rose-300">Integrity</div>
                   </div>
                 </div>
