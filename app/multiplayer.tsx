@@ -70,7 +70,7 @@ export function AuthPage({ nav }: { nav: Nav }) {
     const { data, error } = await supabase.auth.signInWithPassword({ email: demoEmail, password: demoPassword })
     if (!error && data.session) {
       setMessage('Demo account signed in.')
-      nav('codemates')
+      nav('home')
     } else {
       setMessage('Demo sign in is temporarily unavailable. Please try again.')
     }
