@@ -2655,7 +2655,7 @@ export function HireMeContent() {
                       <div className="flex items-center gap-2">
                         <Zap className="h-4 w-4 text-[#6d73ff]" />
                         <h4 className="font-display text-lg uppercase text-[#171717] dark:text-[#f4f4f7]">
-                          Codeforces AST Normalization & K-Gram Winnowing Matrix
+                          AST Normalisation
                         </h4>
                       </div>
                       <p className="mt-1 text-xs font-bold leading-relaxed text-[#171717]/70 dark:text-[#a1a1aa]">
