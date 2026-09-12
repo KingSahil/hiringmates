@@ -263,6 +263,66 @@ export function AuthContent() {
             )}
             <ArrowRight className="h-4 w-4" />
           </button>
+
+          {mode === 'signin' && (
+            <div className="pt-2 space-y-2.5">
+              <div className="relative my-4 text-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-[#171717]/20 dark:border-white/10" />
+                </div>
+                <span className="relative bg-[#fffaf0] px-3 font-mono text-[10px] font-black uppercase text-[#171717]/60 dark:bg-[#15171c] dark:text-[#a1a1aa]">
+                  Alternative Sign In
+                </span>
+              </div>
+
+              {/* Demo Account Button */}
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  setSubmitting(true)
+                  setError('')
+                  setSuccess('')
+                  const supabase = getSupabaseBrowserClient()
+                  const { data, error: anonErr } = await supabase.auth.signInAnonymously({
+                    options: { data: { display_name: `Demo Player ${Math.floor(Math.random() * 9000) + 1000}` } },
+                  })
+                  if (!anonErr && data.session) {
+                    setSuccess('Signed in with Instant Demo Player!')
+                    setTimeout(() => setTab('codemates'), 600)
+                  } else {
+                    setError('Demo anonymous sign in disabled in Supabase. You can sign in with your email/password above.')
+                  }
+                  setSubmitting(false)
+                }}
+                className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[#171717] bg-[#ffd84d] py-3 text-xs font-black uppercase text-[#171717] shadow-sm transition hover:bg-[#ffe37e] dark:border-[#2e323b]"
+              >
+                <Zap className="h-4 w-4 fill-current" /> Use Instant Demo Account
+              </button>
+
+              {/* Google OAuth Button */}
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  setSubmitting(true)
+                  setError('')
+                  const supabase = getSupabaseBrowserClient()
+                  const { error: oErr } = await supabase.auth.signInWithOAuth({
+                    provider: 'google',
+                    options: { redirectTo: `${window.location.origin}/auth/callback` },
+                  })
+                  if (oErr) {
+                    setError('Google sign-in is not configured yet in Supabase Auth.')
+                    setSubmitting(false)
+                  }
+                }}
+                className="flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-2xl border-2 border-[#171717] bg-white py-3 text-xs font-black uppercase text-[#171717] shadow-sm transition hover:bg-neutral-50 dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7]"
+              >
+                <span className="font-black text-[#4285f4]">G</span> Continue with Google
+              </button>
+            </div>
+          )}
         </form>
 
         {/* Back Link */}
