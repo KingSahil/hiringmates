@@ -29,3 +29,4 @@ tools/github-detector/data/
 # TypeScript incremental build info (regenerated on every build)
 tsconfig.tsbuildinfo
 next-env.d.ts.bak
+.env.bak
