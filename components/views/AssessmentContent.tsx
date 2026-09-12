@@ -196,6 +196,20 @@ export function AssessmentContent() {
           three multiple-choice questions and one short written question.
         </p>
 
+        {!session && saved && (
+          <div className="mt-4 rounded-lg border-2 border-[#39d5c8] bg-[#39d5c8]/10 p-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-[#171717]/50 dark:text-[#f4f4f7]/50">
+              Saved profile found
+            </p>
+            <p className="mt-1 text-sm font-bold text-[#171717] dark:text-[#f4f4f7]">
+              {saved.rough.headline}
+            </p>
+            <p className="mt-1 text-xs text-[#171717]/70 dark:text-[#f4f4f7]/70">
+              {saved.summary}
+            </p>
+          </div>
+        )}
+
         {!session && (
           <button
             onClick={start}
@@ -203,7 +217,7 @@ export function AssessmentContent() {
             className="mt-4 flex items-center gap-2 rounded-xl border-2 border-[#171717] bg-[#6d73ff] px-4 py-2 text-xs font-black uppercase text-white shadow-[2px_2px_0_#171717] transition hover:bg-[#585fe6] disabled:opacity-50 dark:border-[#2e323b] dark:shadow-[2px_2px_0_#000000]"
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            Start assessment
+            {saved ? 'Start new assessment' : 'Start assessment'}
           </button>
         )}
 
@@ -338,6 +352,33 @@ export function AssessmentContent() {
               </span>
             ))}
           </div>
+
+          {session.enhanced.skills.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {session.enhanced.skills.map((s) => (
+                <li
+                  key={s.name}
+                  className="rounded-lg border-2 border-[#171717]/10 p-2 text-xs dark:border-[#2e323b]"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-black uppercase">{s.name}</span>
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[9px] font-black uppercase text-[#171717] ${
+                        s.confidence === 'high' ? 'bg-[#39d5c8]' : 'bg-[#ffd84d]'
+                      }`}
+                    >
+                      {s.confidence}
+                    </span>
+                  </div>
+                  {s.evidence.length > 0 && (
+                    <p className="mt-1 text-[11px] text-[#171717]/60 dark:text-[#f4f4f7]/60">
+                      {s.evidence.join(' · ')}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
 
           <dl className="mt-4 grid gap-2 border-t-2 border-[#171717]/10 pt-4 text-sm dark:border-[#2e323b]">
             <div className="flex justify-between">
