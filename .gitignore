@@ -30,3 +30,6 @@ tools/github-detector/data/
 tsconfig.tsbuildinfo
 next-env.d.ts.bak
 .env.bak
+
+# Detector clone cache - clones embed their own .git repositories, so must never be committed
+backend/data/
