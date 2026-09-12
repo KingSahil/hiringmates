@@ -4,6 +4,7 @@ import { Zap, LogOut, Sun, Moon, Settings } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useTheme } from '@/lib/theme'
+import { NotificationBell } from '@/components/NotificationBell'
 
 export function Navbar() {
   const { user, isAuthorized, signInWithGithub, signOut, setIsSettingsOpen } = useAuth()
@@ -66,6 +67,9 @@ export function Navbar() {
               <Moon className="h-4 w-4" />
             )}
           </button>
+
+          {/* Round 2 Mentorship Notification Bell */}
+          <NotificationBell />
 
           {isAuthorized ? (
             <div className="flex items-center gap-2">

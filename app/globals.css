@@ -284,3 +284,26 @@ html.dark .card-neo:hover {
   font-family: var(--font-bebas), "Bebas Neue", Impact, sans-serif;
   letter-spacing: 0.02em;
 }
+
+@keyframes floatUp {
+  0% {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  15% {
+    transform: translateY(-20px) scale(1.1);
+    opacity: 1;
+  }
+  80% {
+    transform: translateY(-160px) scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(-240px) scale(0.8);
+    opacity: 0;
+  }
+}
+
+.animate-float-up {
+  animation: floatUp 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

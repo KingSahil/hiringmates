@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import { useNavigation } from '@/lib/navigation'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
+import { useNotifications } from '@/lib/notifications'
 
 type HireMeStep = 'profile' | 'invite' | 'check' | 'assessment' | 'admin' | 'results'
 
@@ -78,6 +79,7 @@ The incident response server acts as an MCP server bridging AI diagnostic agents
 
 export function HireMeContent() {
   const { setTab } = useNavigation()
+  const { triggerRound2Notification, setActiveRole } = useNotifications()
   const [step, setStep] = useState<HireMeStep>('invite')
 
   // Profile state
@@ -1366,7 +1368,18 @@ export function HireMeContent() {
                   </div>
                 </div>
 
-                <div className="mt-6 flex justify-center gap-2">
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  <button
+                    onClick={() => {
+                      triggerRound2Notification('mentor', candidateName)
+                      setActiveRole('candidate')
+                      setTab('mentorship')
+                    }}
+                    className="btn-neo btn-neo-lemon py-2 px-4 text-xs flex items-center gap-1.5"
+                  >
+                    <Video className="h-3.5 w-3.5 fill-current" />
+                    <span>Join Round 2: Mentorship Call</span>
+                  </button>
                   <button
                     onClick={() => setStep('admin')}
                     className="btn-neo btn-neo-aqua py-2 text-xs"
@@ -1436,9 +1449,17 @@ export function HireMeContent() {
                 <div className="my-2 border-t border-[#171717]/15 dark:border-[#2e323b]" />
                 <p className="text-xs font-bold text-[#171717] dark:text-[#f4f4f7]">Signal Score: 94/100</p>
                 <p className="text-xs font-bold text-emerald-700 dark:text-emerald-400 mt-1">Integrity: No focus loss</p>
-                <div className="mt-4 flex gap-2">
-                  <button className="btn-neo btn-neo-ink flex-1 py-1.5 text-xs">
-                    Contact
+                <div className="mt-4 flex flex-col sm:flex-row gap-2">
+                  <button
+                    onClick={() => {
+                      triggerRound2Notification('candidate', selectedCandidate)
+                      setActiveRole('mentor')
+                      setTab('mentorship')
+                    }}
+                    className="btn-neo btn-neo-aqua flex-1 py-1.5 text-xs flex items-center justify-center gap-1.5"
+                  >
+                    <Video className="h-3.5 w-3.5 fill-current" />
+                    <span>Host Round 2 Call</span>
                   </button>
                   <button
                     onClick={() => setStep('invite')}

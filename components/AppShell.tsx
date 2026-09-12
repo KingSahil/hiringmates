@@ -7,6 +7,7 @@ import { LandingContent } from '@/components/views/LandingContent'
 import { AuthorizedHome } from '@/components/views/AuthorizedHome'
 import { HireMeContent } from '@/components/views/HireMeContent'
 import { CodeMatesContent } from '@/components/views/CodeMatesContent'
+import { MentorshipMeetContent } from '@/components/views/MentorshipMeetContent'
 
 interface AppShellProps {
   initialTab?: AppTab
@@ -22,6 +23,7 @@ export function AppShell({ initialTab }: AppShellProps) {
       if (
         (initialTab === 'hireme' && currentPath.includes('hireme')) ||
         (initialTab === 'codemates' && currentPath.includes('codemates')) ||
+        (initialTab === 'mentorship' && currentPath.includes('mentorship')) ||
         (initialTab === 'home' && currentPath === '/')
       ) {
         setTab(initialTab)
@@ -29,13 +31,16 @@ export function AppShell({ initialTab }: AppShellProps) {
     }
   }, [initialTab, setTab, tab])
 
+  const currentTab = initialTab && tab === 'home' ? initialTab : tab
+
   return (
     <main className="w-full">
-      {tab === 'home' && (
+      {currentTab === 'home' && (
         isAuthorized ? <AuthorizedHome /> : <LandingContent />
       )}
-      {tab === 'hireme' && <HireMeContent />}
-      {tab === 'codemates' && <CodeMatesContent />}
+      {currentTab === 'hireme' && <HireMeContent />}
+      {currentTab === 'codemates' && <CodeMatesContent />}
+      {currentTab === 'mentorship' && <MentorshipMeetContent />}
     </main>
   )
 }

@@ -6,6 +6,7 @@ import { SettingsModal } from '@/components/SettingsModal'
 import { NavigationProvider } from '@/lib/navigation'
 import { ThemeProvider } from '@/lib/theme'
 import { AuthProvider } from '@/lib/auth'
+import { NotificationProvider } from '@/lib/notifications'
 
 const bebas = Bebas_Neue({
   weight: '400',
@@ -59,11 +60,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className="min-h-screen bg-[#fffaf0] text-[#171717] antialiased dark:bg-[#0c0d11] dark:text-[#f4f4f7]">
         <ThemeProvider>
           <AuthProvider>
-            <NavigationProvider>
-              <Navbar />
-              <SettingsModal />
-              {children}
-            </NavigationProvider>
+            <NotificationProvider>
+              <NavigationProvider>
+                <Navbar />
+                <SettingsModal />
+                {children}
+              </NavigationProvider>
+            </NotificationProvider>
           </AuthProvider>
         </ThemeProvider>
       </body>
