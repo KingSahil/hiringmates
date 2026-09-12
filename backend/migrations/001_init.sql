@@ -19,6 +19,10 @@ create table if not exists extractions (
   cache_key       text primary key,
   handle          text        not null,
   detector_output jsonb       not null,
+  -- 'detector' = freshly extracted, 'cache' = reused from a previous run.
+  -- Must exist: the Extraction model carries this field, so writes fail with
+  -- PGRST204 if the column is missing.
+  source          text        not null default 'detector',
   created_at      timestamptz not null default now()
 );
 
