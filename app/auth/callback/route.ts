@@ -15,8 +15,14 @@ export async function GET(request: Request) {
 
   const origin = url.origin
   const forwardedHost = request.headers.get('x-forwarded-host')
-  const isLocalEnv = process.env.NODE_ENV === 'development'
-  const redirectBase = (isLocalEnv || !forwardedHost) ? origin : `https://${forwardedHost}`
+  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https'
+
+  let redirectBase = origin
+  if (forwardedHost) {
+    redirectBase = `${forwardedProto}://${forwardedHost}`
+  } else if (process.env.NEXT_PUBLIC_SITE_URL) {
+    redirectBase = process.env.NEXT_PUBLIC_SITE_URL.replace(/\/+$/, '')
+  }
 
   if (error || errorDescription) {
     const message = encodeURIComponent(errorDescription || error || 'Authentication failed')
