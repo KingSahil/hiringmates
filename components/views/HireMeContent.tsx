@@ -48,6 +48,7 @@ import {
   FlightMetrics,
   PlagiarismResult,
 } from '@/lib/proctoring/antiCheatEngine'
+import { EyeTrackerEngine, GazeDirection, GazeStatus } from '@/lib/proctoring/eyeTracker'
 
 type HireMeStep = 'profile' | 'invite' | 'check' | 'assessment' | 'admin' | 'results'
 
@@ -149,6 +150,21 @@ export function HireMeContent() {
   const [isReplaying, setIsReplaying] = useState(false)
   const [replaySpeed, setReplaySpeed] = useState<number>(1)
   const [plagiarismMatrix, setPlagiarismMatrix] = useState<Record<string, PlagiarismResult>>({})
+
+  // Eye & Gaze Tracking State (Looking Down, Left, Right, Away)
+  const eyeTrackerRef = useRef<EyeTrackerEngine | null>(null)
+  const [gazeStatus, setGazeStatus] = useState<GazeStatus>({
+    direction: 'CENTER',
+    confidence: 98,
+    horizontalOffset: 0,
+    verticalOffset: 0,
+    faceDetected: true,
+    warningCount: 0,
+    isSustainedDeviation: false,
+  })
+  const [gazeWarnings, setGazeWarnings] = useState(0)
+  const [showGazeWarningModal, setShowGazeWarningModal] = useState(false)
+  const [gazeWarningDetail, setGazeWarningDetail] = useState<{ count: number; direction: string }>({ count: 0, direction: '' })
 
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null)
   const pipVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -453,8 +469,13 @@ export function HireMeContent() {
     setTabViolations(0)
     setIsTerminated(false)
     setShowTabWarning(false)
+    setShowGazeWarningModal(false)
+    setGazeWarnings(0)
     setSecurityViolations([])
     flightRecorderRef.current.reset()
+    if (eyeTrackerRef.current) {
+      eyeTrackerRef.current.resetWarnings()
+    }
 
     // Pre-seed initial keystroke timeline so flight recorder has telemetry baseline
     const starterText = questions[1].defaultValue || ''
@@ -485,6 +506,75 @@ export function HireMeContent() {
     const cleanup = shield.activateShield()
     return () => cleanup()
   }, [step, isTerminated])
+
+  // Real-time Eye & Gaze Tracking loop (Looking Down, Left, Right, Away)
+  useEffect(() => {
+    if (step !== 'assessment' || isTerminated || !cameraStream) {
+      if (eyeTrackerRef.current) {
+        eyeTrackerRef.current.stop()
+        eyeTrackerRef.current = null
+      }
+      return
+    }
+
+    const tracker = new EyeTrackerEngine({
+      maxWarnings: 3,
+      sustainedDurationMs: 1800,
+      onGazeUpdate: (status) => {
+        setGazeStatus(status)
+      },
+      onWarning: (count, direction) => {
+        setGazeWarnings(count)
+        setIsPaused(true)
+        setGazeWarningDetail({ count, direction: direction.replace('_', ' ') })
+        setShowGazeWarningModal(true)
+        setSecurityViolations((prev) => [
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'VOICE_DETECTED',
+            detail: `Gaze Strike #${count} of 3: Sustained deviation (${direction.replace('_', ' ')}). Please refocus on the test screen.`,
+            severity: count >= 3 ? 'CRITICAL' : 'WARNING',
+          },
+          ...prev,
+        ])
+      },
+      onTerminated: (reason) => {
+        setIsTerminated(true)
+        setShowGazeWarningModal(false)
+        setShowTabWarning(false)
+        setIsPaused(true)
+        setTerminationReason(reason)
+
+        if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+        if (micStream) micStream.getTracks().forEach((t) => t.stop())
+        if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
+        setCameraReady(false)
+        setMicReady(false)
+        setScreenReady(false)
+
+        setStep('results')
+      },
+    })
+
+    eyeTrackerRef.current = tracker
+
+    let cancelled = false
+    const checkVideo = () => {
+      if (cancelled) return
+      if (pipVideoRef.current && pipVideoRef.current.readyState >= 2) {
+        tracker.start(pipVideoRef.current)
+      } else {
+        setTimeout(checkVideo, 250)
+      }
+    }
+    checkVideo()
+
+    return () => {
+      cancelled = true
+      tracker.stop()
+      eyeTrackerRef.current = null
+    }
+  }, [step, isTerminated, cameraStream, micStream, screenStream])
 
   // Assessment state
   const [currentQuestion, setCurrentQuestion] = useState(0)
@@ -1279,6 +1369,18 @@ export function HireMeContent() {
                         {qrCompanionActive ? 'Active Desk' : 'Standby'}
                       </span>
                     </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Gaze Tracking:</span>
+                      <span className={gazeStatus.direction === 'CENTER' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                        {gazeStatus.direction === 'CENTER' ? 'Centered' : gazeStatus.direction.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white/60">Gaze Strikes:</span>
+                      <span className={gazeWarnings > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>
+                        {gazeWarnings} / 3
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1454,11 +1556,53 @@ export function HireMeContent() {
           </div>
         )}
 
+        {/* Eye Gaze Deviation Warning Modal (3 Warnings before Auto-Termination) */}
+        {showGazeWarningModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-lg rounded-2xl border-4 border-[#171717] bg-[#ffd84d] p-6 text-[#171717] shadow-hard-lg dark:border-[#000000]">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 border-[#171717] bg-[#ff6b6b] text-white">
+                  <AlertTriangle className="h-7 w-7" />
+                </div>
+                <div>
+                  <span className="rounded bg-[#171717] px-2 py-0.5 font-mono text-[10px] font-black uppercase text-white">
+                    EYE GAZE ALERT · WARNING {gazeWarningDetail.count} OF 3
+                  </span>
+                  <h3 className="font-display text-2xl uppercase tracking-tight sm:text-3xl">
+                    Gaze Deviation Detected!
+                  </h3>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border-2 border-[#171717] bg-white p-4 text-xs font-bold leading-relaxed text-[#171717] shadow-[2px_2px_0_#171717]">
+                <p>
+                  The AI eye tracking engine detected sustained gaze deviation ({gazeWarningDetail.direction}) away from the test area for more than 1.8 seconds.
+                </p>
+                <p className="mt-2 text-rose-700 font-black">
+                  {gazeWarningDetail.count >= 3
+                    ? '⚠️ CRITICAL: THIS IS YOUR 3RD AND FINAL WARNING (3/3). Any further gaze deviation (looking down at phone, left, right, or away) will IMMEDIATELY TERMINATE your session with disqualification.'
+                    : `⚠️ WARNING ${gazeWarningDetail.count} OF 3: Looking down at your lap/phone, looking right/left, or looking away from the screen is strictly monitored. 3 total warnings allowed before session termination.`}
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setShowGazeWarningModal(false)
+                  setIsPaused(false)
+                }}
+                className="btn-neo btn-neo-ink mt-5 w-full py-3 text-xs uppercase"
+              >
+                I Understand — Refocus Eyes On Screen & Resume
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Floating Live Proctor HUD during Assessment */}
         {step === 'assessment' && (
           <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end gap-1.5 pointer-events-auto select-none">
             <div className="w-52 sm:w-60 overflow-hidden rounded-xl border-3 border-[#171717] bg-[#171717] shadow-hard-lg dark:border-[#2e323b] dark:shadow-[4px_4px_0_#000000]">
-              <div className="relative aspect-video bg-black">
+              <div className="relative aspect-video bg-black overflow-hidden">
                 {cameraStream ? (
                   <video
                     ref={pipVideoRef}
@@ -1473,14 +1617,48 @@ export function HireMeContent() {
                     <span>Camera Standby</span>
                   </div>
                 )}
+
+                {/* Eye tracking crosshair reticle overlay */}
+                <div
+                  className="absolute pointer-events-none transition-all duration-100 text-[#39d5c8] opacity-80"
+                  style={{
+                    top: `${Math.max(20, Math.min(80, 50 + gazeStatus.verticalOffset * 30))}%`,
+                    left: `${Math.max(20, Math.min(80, 50 + gazeStatus.horizontalOffset * 30))}%`,
+                    transform: 'translate(-50%, -50%)',
+                  }}
+                >
+                  <div className="h-5 w-5 border-2 border-dashed rounded-full border-[#39d5c8] flex items-center justify-center">
+                    <span className="h-1.5 w-1.5 bg-[#39d5c8] rounded-full" />
+                  </div>
+                </div>
+
                 {/* Recording indicator */}
                 <div className="absolute top-1.5 left-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-black text-rose-400 backdrop-blur-xs">
                   <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
                   REC
                 </div>
+
+                {/* Eye Tracking Reticle HUD badge */}
+                <div className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-black backdrop-blur-xs">
+                  <span className={`h-1.5 w-1.5 rounded-full ${
+                    gazeStatus.direction === 'CENTER' ? 'bg-emerald-400' : 'bg-rose-500 animate-ping'
+                  }`} />
+                  <span className={gazeStatus.direction === 'CENTER' ? 'text-emerald-400' : 'text-rose-400 font-black'}>
+                    {gazeStatus.direction === 'CENTER' ? 'EYES CENTER' : gazeStatus.direction.replace('_', ' ')}
+                  </span>
+                </div>
+
                 <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-bold text-white backdrop-blur-xs">
                   <ShieldCheck className="h-2.5 w-2.5 text-[#39d5c8]" />
                   <span>PROCTOR LIVE</span>
+                </div>
+
+                {/* Gaze Strikes counter in PIP */}
+                <div className="absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded bg-black/80 px-1.5 py-0.5 text-[8px] font-black text-white backdrop-blur-xs">
+                  <span className="text-[#ffd84d]">Gaze:</span>
+                  <span className={gazeWarnings > 0 ? 'text-rose-400 font-black' : 'text-emerald-400'}>
+                    {gazeWarnings} / 3 Strikes
+                  </span>
                 </div>
               </div>
 
@@ -1532,7 +1710,7 @@ export function HireMeContent() {
                   Session Terminated
                 </h2>
                 <p className="mt-1 text-xs font-bold text-[#171717]/70 dark:text-[#a1a1aa]">
-                  Multiple tab switch violations detected. This assessment was automatically terminated for academic integrity.
+                  {terminationReason || 'Academic integrity violations detected. This assessment was automatically terminated.'}
                 </p>
 
                 <div className="mt-5 grid grid-cols-3 gap-2.5">
@@ -1553,7 +1731,10 @@ export function HireMeContent() {
                 </div>
 
                 <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-3 text-left text-xs font-bold text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
-                  <span className="font-black">Violation Audit Log:</span> 2 tab switch / defocus events occurred during proctored assessment. All webcam and display media captures locked and flagged.
+                  <span className="font-black">Violation Audit Log:</span>{' '}
+                  {terminationReason
+                    ? terminationReason
+                    : `${tabViolations} tab switch events and ${gazeWarnings} eye gaze deviations recorded. Media captures locked and flagged for recruiter review.`}
                 </div>
 
                 <div className="mt-6 flex justify-center gap-2">
@@ -1561,6 +1742,9 @@ export function HireMeContent() {
                     onClick={() => {
                       setIsTerminated(false)
                       setTabViolations(0)
+                      setGazeWarnings(0)
+                      setShowGazeWarningModal(false)
+                      if (eyeTrackerRef.current) eyeTrackerRef.current.resetWarnings()
                       setQuestionTimes({ 0: 2 * 60, 1: 10 * 60 })
                       setStep('invite')
                     }}
@@ -2072,12 +2256,20 @@ export function HireMeContent() {
                           {selectedCandidate === 'Alex Rivera' ? 'FAIL (Burst Paste)' : 'PASS (96% Organic Human)'}
                         </span>
                       </div>
-                      <div className="flex items-center justify-between py-1.5">
+                      <div className="flex items-center justify-between border-b border-[#171717]/10 py-1.5 dark:border-[#2e323b]">
                         <span className="flex items-center gap-2">
                           <Check className="h-4 w-4 text-emerald-600" /> Codeforces AST Winnowing Similarity
                         </span>
                         <span className={`font-mono ${selectedCandidate === 'Alex Rivera' ? 'text-rose-600' : 'text-emerald-600'}`}>
                           {selectedCandidate === 'Alex Rivera' ? 'FLAGGED (82.4% Collusion)' : 'PASS (24.2% Clean)'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between py-1.5">
+                        <span className="flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-600" /> AI Eye & Gaze Tracking Compliance
+                        </span>
+                        <span className={`font-mono ${selectedCandidate === 'Alex Rivera' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                          {selectedCandidate === 'Alex Rivera' ? 'REVIEW (3 Gaze Deviations)' : 'PASS (98% Gaze Centered)'}
                         </span>
                       </div>
                     </div>
