@@ -60,6 +60,49 @@ is told to avoid them. Later this becomes a pgvector similarity check.
 **Auth is out of scope here.** The backend trusts the `Identity` it is given.
 When Supabase auth lands in front of this service it produces that object.
 
+## Wiring auth (for whoever builds it)
+
+`app/auth/callback/route.ts` already calls `exchangeCodeForSession`, so the
+server half is in place. The missing piece is **initiation** — nothing currently
+calls `signInWithOAuth`, so no `code` ever reaches that route.
+
+Once OAuth is initiated, map the Supabase session onto `Identity`:
+
+| `Identity` field | Source |
+|---|---|
+| `user_id` | `session.user.id` |
+| `github_handle` | identity with `provider === 'github'` → `identity_data.user_name` |
+| `github_email` | same identity → `identity_data.email` |
+| `google_email` | identity with `provider === 'google'` → `identity_data.email` |
+| `provider_token` | `session.provider_token` |
+
+Notes that matter:
+
+- **Both emails are required**, because the extraction cache is keyed on the
+  pair. That means the user must have *both* GitHub and Google linked before
+  onboarding completes; otherwise the cache key is partial and never hits.
+- **`provider_token` is only present for the provider just used**, and is not
+  persisted across sessions. Store it encrypted server-side if you want
+  post-TTL re-extraction to avoid the anonymous 60 req/hr cap.
+- Call `POST /sessions` from a **server** context (route handler or server
+  action), never the browser — it carries the service-role path and the token.
+
+```jsonc
+POST /sessions
+{
+  "identity": {
+    "user_id": "...",
+    "github_email": "...",
+    "google_email": "...",
+    "github_handle": "...",
+    "provider_token": "..."
+  },
+  "scenario": "candidate-onboarding"
+}
+```
+
+Then poll `GET /sessions/{id}` until `status` is `awaiting`.
+
 ## Not verified in this environment
 
 - Gemini calls (no API key present)
