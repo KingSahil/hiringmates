@@ -157,7 +157,11 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    background: #0c1017;
+  }
   body {
     @apply bg-background text-foreground;
+    font-family: Arial, Helvetica, sans-serif;
   }
 }
