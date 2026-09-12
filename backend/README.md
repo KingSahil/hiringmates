@@ -34,6 +34,49 @@ degrading.
 likely to wrap prose around its JSON. If you see `LLMError: ... returned
 non-JSON output`, prefer a larger Anthropic model or switch provider.
 
+### Working example: OmniRoute
+
+The current local setup routes through **OmniRoute**, an OpenAI-compatible
+gateway on `127.0.0.1:20128`:
+
+```
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=http://127.0.0.1:20128/api/v1
+OPENAI_MODEL=antigravity/gemini-3.7-flash-high
+```
+
+Note the `/api/v1` prefix — the gateway serves `/api/v1/models` and
+`/api/v1/chat/completions`, not `/v1/...`. Verified live: the model exists among
+233 exposed, and a real `complete_model` call returns a validated `RoughProfile`.
+
+**The schema must be in the prompt.** A vague instruction makes the model invent
+its own field names (observed: it returned `language_distribution` instead of
+the requested fields) and the call fails with `LLMError`. Every scenario's
+instruction states its fields explicitly — keep it that way.
+
+## Database setup
+
+Apply the migration before running against a real Supabase project:
+
+```bash
+psql "$SUPABASE_URL" -f migrations/001_init.sql
+```
+
+Four tables:
+
+| Table | Purpose | Retention |
+|---|---|---|
+| `extractions` | Cached detector reports, keyed by `github_email\|google_email` | Short — gated by `EXTRACTION_TTL_DAYS` |
+| `sessions` | One onboarding run; `payload` is the whole Session as jsonb | Short — polling state |
+| `candidate_profiles` | The durable assessed profile | **Long — outlives the extraction TTL** |
+| `served_questions` | Prompts already served, for anti-repeat | Long — needed for dedupe |
+
+RLS is enabled on all four. `extractions` intentionally has **no** user-facing
+policy, so anon/authenticated get nothing; only the service role can read it.
+
+Reminder: the service role bypasses RLS, so these policies are defence in depth,
+not the isolation boundary.
+
 ## Layout
 
 | Path | Role |

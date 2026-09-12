@@ -1,4 +1,10 @@
-"""LLM layer tests. No network, no API keys."""
+"""
+LLM layer tests. No network, no API keys.
+
+Config-sensitive cases blank their keys explicitly: `Settings` reads from
+backend/.env, so anything relying on "unset" must not inherit the developer's
+real environment.
+"""
 
 from __future__ import annotations
 
@@ -67,22 +73,38 @@ class TestProviderSelection:
 
 
 class TestConfigValidation:
+    """
+    Keys are blanked explicitly in every case.
+
+    `Settings` reads from backend/.env, so these assertions would otherwise
+    depend on whether the developer has a real .env present. That made the
+    suite pass locally and fail the moment a .env was written — see the
+    note in the module docstring.
+    """
+
     def test_gemini_active_only_requires_gemini_key(self):
-        problems = Settings(llm_provider="gemini").validate()
+        problems = Settings(llm_provider="gemini", gemini_api_key="").validate()
         assert any("GEMINI_API_KEY" in p for p in problems)
         assert not any("OPENAI" in p for p in problems)
         assert not any("ANTHROPIC" in p for p in problems)
 
     def test_openai_active_only_requires_openai_key(self):
-        problems = Settings(llm_provider="openai").validate()
+        problems = Settings(llm_provider="openai", openai_api_key="").validate()
         assert any("OPENAI_API_KEY" in p for p in problems)
         assert not any("GEMINI" in p for p in problems)
 
     def test_anthropic_active_only_requires_anthropic_key(self):
-        problems = Settings(llm_provider="anthropic").validate()
+        problems = Settings(llm_provider="anthropic",
+                            anthropic_api_key="").validate()
         assert any("ANTHROPIC_API_KEY" in p for p in problems)
         assert not any("GEMINI" in p for p in problems)
 
     def test_unknown_provider_is_reported(self):
         problems = Settings(llm_provider="nope").validate()
         assert any("not one of" in p for p in problems)
+
+    def test_configured_provider_reports_no_key_problem(self):
+        """A populated key for the active provider silences that complaint."""
+        problems = Settings(llm_provider="openai",
+                            openai_api_key="sk-test").validate()
+        assert not any("OPENAI_API_KEY" in p for p in problems)
