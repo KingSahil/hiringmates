@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 
   if (error || errorDescription) {
     const message = encodeURIComponent(errorDescription || error || 'Authentication failed')
-    return NextResponse.redirect(`${redirectBase}/auth?error=${message}`)
+    return NextResponse.redirect(`${redirectBase}/?error=${message}`)
   }
 
   if (code) {
@@ -48,7 +48,7 @@ export async function GET(request: Request) {
     const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
     if (exchangeError) {
       return NextResponse.redirect(
-        `${redirectBase}/auth?error=${encodeURIComponent(exchangeError.message)}`
+        `${redirectBase}/?error=${encodeURIComponent(exchangeError.message)}`
       )
     }
   }

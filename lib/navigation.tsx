@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 
-export type AppTab = 'home' | 'hireme' | 'codemates' | 'auth'
+export type AppTab = 'home' | 'hireme' | 'codemates'
 
 interface NavigationContextType {
   tab: AppTab
@@ -19,7 +19,6 @@ function getTabFromPath(): AppTab {
   const path = window.location.pathname.toLowerCase()
   if (path.includes('hireme')) return 'hireme'
   if (path.includes('codemates')) return 'codemates'
-  if (path.includes('auth')) return 'auth'
   return 'home'
 }
 

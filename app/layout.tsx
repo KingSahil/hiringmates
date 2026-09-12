@@ -2,8 +2,10 @@ import type { Metadata, Viewport } from 'next'
 import { Bebas_Neue, Inter } from 'next/font/google'
 import './globals.css'
 import { Navbar } from '@/components/Navbar'
+import { SettingsModal } from '@/components/SettingsModal'
 import { NavigationProvider } from '@/lib/navigation'
 import { ThemeProvider } from '@/lib/theme'
+import { AuthProvider } from '@/lib/auth'
 
 const bebas = Bebas_Neue({
   weight: '400',
@@ -56,10 +58,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body className="min-h-screen bg-[#fffaf0] text-[#171717] antialiased dark:bg-[#0c0d11] dark:text-[#f4f4f7]">
         <ThemeProvider>
-          <NavigationProvider>
-            <Navbar />
-            {children}
-          </NavigationProvider>
+          <AuthProvider>
+            <NavigationProvider>
+              <Navbar />
+              <SettingsModal />
+              {children}
+            </NavigationProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
