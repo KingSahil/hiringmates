@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Zap, LogOut, Sun, Moon, Settings, ClipboardList } from 'lucide-react'
+import { LogOut, Sun, Moon, Settings, ClipboardList } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useTheme } from '@/lib/theme'
@@ -40,14 +40,15 @@ export function Navbar() {
             title="HiringMates Home"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-xl border-2 border-[#171717] bg-[#ffd84d] shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:shadow-[2px_2px_0_#000000]">
-              <Zap className="h-4 w-4 fill-current text-[#171717]" />
+              <img
+                src="/brand-logo.png"
+                alt="HiringMates"
+                className="h-5 w-5 object-contain"
+              />
             </div>
             <div className="flex items-center gap-1.5">
               <span className="font-display text-2xl uppercase tracking-wide text-[#171717] dark:text-[#f4f4f7]">
-                HIRING<span className="text-[#6d73ff]">MATES</span>
-              </span>
-              <span className="rounded border border-[#171717] bg-[#39d5c8] px-1.5 py-0.2 text-[9px] font-black uppercase text-[#171717] dark:border-[#000000]">
-                PRO
+                HIRING<span className="text-[#ffd84d]">MATES</span>
               </span>
             </div>
           </a>

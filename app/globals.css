@@ -307,3 +307,91 @@ html.dark .card-neo:hover {
 .animate-float-up {
   animation: floatUp 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Word Title Wrappers */
+.loop-title-word-wrap {
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* Floating Stickers */
+.sticker {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  filter: drop-shadow(7px 9px 0 rgba(0, 0, 0, 0.18));
+}
+
+@media (max-width: 1023px) {
+  .sticker {
+    display: none !important;
+  }
+}
+
+/* Micro-interaction Scan Line */
+.upload-scan-line {
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  z-index: 2;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(57, 213, 200, 0.85);
+  box-shadow: 0 0 10px rgba(57, 213, 200, 0.75);
+  pointer-events: none;
+}
+
+/* Interactive FAQ Marquee Ticker */
+@keyframes faqMarqueeVertical {
+  0% {
+    transform: translateY(0%);
+  }
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+.faq-marquee-container {
+  position: relative;
+  max-height: 400px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent 0%, black 5%, black 95%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 5%, black 95%, transparent 100%);
+  transition: max-height 0.3s ease;
+}
+
+@media (min-width: 640px) {
+  .faq-marquee-container {
+    max-height: 460px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .faq-marquee-container {
+    max-height: 480px;
+  }
+}
+
+.faq-marquee-container.has-open-card {
+  mask-image: none !important;
+  -webkit-mask-image: none !important;
+}
+
+.faq-marquee-track {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  animation: faqMarqueeVertical 50s linear infinite;
+  will-change: transform;
+}
+
+@media (hover: hover) {
+  .faq-marquee-track:has(.faq-card:hover) {
+    animation-play-state: paused !important;
+  }
+}
+
+.faq-marquee-track:focus-within,
+.faq-marquee-container.has-open-card .faq-marquee-track {
+  animation-play-state: paused !important;
+}

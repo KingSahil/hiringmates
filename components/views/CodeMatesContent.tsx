@@ -47,8 +47,8 @@ interface RemoteCursorInfo {
 const PALETTE = [
   { bg: 'bg-[#ffd84d]', hex: '#ffd84d', name: 'Lemon' },
   { bg: 'bg-[#39d5c8]', hex: '#39d5c8', name: 'Teal' },
-  { bg: 'bg-[#ff57ce]', hex: '#ff57ce', name: 'Berry' },
-  { bg: 'bg-[#6d73ff]', hex: '#6d73ff', name: 'Indigo' },
+  { bg: 'bg-[#6d73ff]', hex: '#6d73ff', name: 'Iris' },
+  { bg: 'bg-[#38bdf8]', hex: '#38bdf8', name: 'Sky' },
   { bg: 'bg-[#ff6b6b]', hex: '#ff6b6b', name: 'Coral' },
   { bg: 'bg-[#51cf66]', hex: '#51cf66', name: 'Mint' },
 ]
@@ -914,7 +914,7 @@ export async function processNext(workerFn) {
             <div className="mb-6 flex flex-col justify-between gap-3 border-b-2 border-[#171717] pb-5 transition-colors sm:flex-row sm:items-center dark:border-[#2e323b]">
               <div>
                 <div className="mb-1 flex items-center gap-2">
-                  <span className="rounded-md border border-[#171717] bg-[#ff57ce] px-2 py-0.2 text-[10px] font-black uppercase text-white dark:border-[#000000]">
+                  <span className="rounded-md border border-[#171717] bg-[#6d73ff] px-2 py-0.2 text-[10px] font-black uppercase text-white dark:border-[#000000]">
                     CODEMATES ARCADE
                   </span>
                   <span className="text-xs font-bold text-[#171717]/60 dark:text-[#a1a1aa]">
@@ -929,7 +929,7 @@ export async function processNext(workerFn) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsCreatingRoom(true)}
-                  className="btn-neo btn-neo-berry text-xs"
+                  className="btn-neo btn-neo-iris text-xs"
                 >
                   <Plus className="h-4 w-4" /> Create Room
                 </button>
@@ -1022,7 +1022,7 @@ export async function processNext(workerFn) {
                         setActiveRoom(r)
                         setView('lobby')
                       }}
-                      className="btn-neo btn-neo-berry mt-4 w-full py-2 text-xs"
+                      className="btn-neo btn-neo-iris mt-4 w-full py-2 text-xs"
                     >
                       Enter Lobby <ArrowRight className="h-3.5 w-3.5" />
                     </button>
@@ -1089,7 +1089,7 @@ export async function processNext(workerFn) {
           <div className="mx-auto max-w-3xl">
             <button
               onClick={() => setView('rooms')}
-              className="mb-4 inline-flex cursor-pointer items-center gap-1.5 text-xs font-black uppercase text-[#171717] underline hover:text-[#ff57ce] dark:text-[#f4f4f7] dark:hover:text-[#ff57ce]"
+              className="mb-4 inline-flex cursor-pointer items-center gap-1.5 text-xs font-black uppercase text-[#171717] underline hover:text-[#6d73ff] dark:text-[#f4f4f7] dark:hover:text-[#8085ff]"
             >
               <ArrowLeft className="h-3.5 w-3.5" /> Back to Rooms List
             </button>
@@ -1098,7 +1098,7 @@ export async function processNext(workerFn) {
               <div className="rounded-2xl border-2 border-[#171717] bg-white p-6 shadow-hard transition-colors dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[5px_5px_0_#000000]">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="rounded border border-[#171717] bg-[#ff57ce] px-2 py-0.2 text-[10px] font-black text-white dark:border-[#000000]">
+                    <span className="rounded border border-[#171717] bg-[#6d73ff] px-2 py-0.2 text-[10px] font-black text-white dark:border-[#000000]">
                       LOBBY
                     </span>
                     <span className="font-mono text-xs font-black text-[#171717] dark:text-[#f4f4f7]">
@@ -1128,7 +1128,7 @@ export async function processNext(workerFn) {
                     </h4>
                     <button
                       onClick={handleStartEditName}
-                      className="inline-flex items-center gap-1 text-[10px] font-bold text-[#ff57ce] hover:underline cursor-pointer"
+                      className="inline-flex items-center gap-1 text-[10px] font-bold text-[#6d73ff] hover:underline cursor-pointer dark:text-[#8085ff]"
                     >
                       <Edit3 className="h-2.5 w-2.5" /> Edit your name
                     </button>
@@ -1176,7 +1176,7 @@ export async function processNext(workerFn) {
                       Live remote cursors with player name tags.
                     </li>
                     <li className="flex items-center gap-2">
-                      <MessageSquare className="h-3.5 w-3.5 shrink-0 text-[#ff57ce]" />
+                      <MessageSquare className="h-3.5 w-3.5 shrink-0 text-[#38bdf8]" />
                       Multiplayer room chat with real sender names.
                     </li>
                   </ul>
@@ -1216,12 +1216,12 @@ export async function processNext(workerFn) {
 
               <div className="flex items-center gap-2.5">
                 <div className="flex items-center gap-1 rounded-lg border border-[#171717] bg-white px-2.5 py-1 font-mono text-xs font-black dark:border-[#000000]">
-                  <Users className="h-3 w-3 text-[#ff57ce]" />
+                  <Users className="h-3 w-3 text-[#6d73ff]" />
                   <span>{onlineCount} Online</span>
                 </div>
                 <button
                   onClick={handleRunTests}
-                  className="btn-neo btn-neo-berry px-3 py-1 text-xs"
+                  className="btn-neo btn-neo-iris px-3 py-1 text-xs"
                 >
                   <Play className="h-3 w-3 fill-current" /> Run Tests
                 </button>
@@ -1237,7 +1237,7 @@ export async function processNext(workerFn) {
                   <button
                     onClick={handleStartEditName}
                     title="Change your name"
-                    className="cursor-pointer text-[#ff57ce] hover:underline flex items-center gap-0.5"
+                    className="cursor-pointer text-[#6d73ff] hover:underline flex items-center gap-0.5 dark:text-[#8085ff]"
                   >
                     <Edit3 className="h-2.5 w-2.5" /> Edit
                   </button>
