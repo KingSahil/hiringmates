@@ -305,16 +305,16 @@ export async function processNext(workerFn) {
     }
 
     channel
-      .on('broadcast', { event: 'code-sync' }, ({ payload }) => {
+      .on('broadcast', { event: 'code-sync' }, ({ payload }: any) => {
         if (payload?.code) setCode(payload.code)
       })
-      .on('broadcast', { event: 'chat-msg' }, ({ payload }) => {
+      .on('broadcast', { event: 'chat-msg' }, ({ payload }: any) => {
         if (payload && payload.body) setChatMessages((prev) => [...prev, payload])
       })
       .on('presence', { event: 'sync' }, syncRoster)
       .on('presence', { event: 'join' }, syncRoster)
       .on('presence', { event: 'leave' }, syncRoster)
-      .subscribe(async (status) => {
+      .subscribe(async (status: string) => {
         if (status === 'SUBSCRIBED') {
           await channel.track({
             user_id: currentUser.id,
