@@ -12,6 +12,7 @@ interface AuthContextType {
   isSettingsOpen: boolean
   setIsSettingsOpen: (open: boolean) => void
   signInWithGithub: () => Promise<void>
+  signInWithLinkedIn: () => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -23,6 +24,7 @@ const AuthContext = createContext<AuthContextType>({
   isSettingsOpen: false,
   setIsSettingsOpen: () => {},
   signInWithGithub: async () => {},
+  signInWithLinkedIn: async () => {},
   signOut: async () => {},
 })
 
@@ -64,6 +66,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  const signInWithLinkedIn = useCallback(async () => {
+    const supabase = getSupabaseBrowserClient()
+    await supabase.auth.signInWithOAuth({
+      provider: 'linkedin_oidc',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    })
+  }, [])
+
   const signOut = useCallback(async () => {
     const supabase = getSupabaseBrowserClient()
     await supabase.auth.signOut()
@@ -81,6 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isSettingsOpen,
         setIsSettingsOpen,
         signInWithGithub,
+        signInWithLinkedIn,
         signOut,
       }}
     >

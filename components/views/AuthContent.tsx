@@ -313,6 +313,34 @@ export function AuthContent() {
                 Continue with GitHub
               </button>
 
+              {/* LinkedIn (OIDC) OAuth Button */}
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  setSubmitting(true)
+                  setError('')
+                  setSuccess('')
+                  const supabase = getSupabaseBrowserClient()
+                  const { error: oErr } = await supabase.auth.signInWithOAuth({
+                    provider: 'linkedin_oidc',
+                    options: {
+                      redirectTo: `${window.location.origin}/auth/callback`,
+                    },
+                  })
+                  if (oErr) {
+                    setError(oErr.message || 'LinkedIn (OIDC) sign-in is not enabled in Supabase yet.')
+                    setSubmitting(false)
+                  }
+                }}
+                className="flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-2xl border-2 border-[#171717] bg-[#0a66c2] py-3 text-xs font-black uppercase text-white shadow-[2px_2px_0_#171717] transition hover:bg-[#084e96] hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-60 dark:border-[#2e323b] dark:bg-[#0a66c2] dark:shadow-[2px_2px_0_#000000]"
+              >
+                <svg className="h-4 w-4 fill-current" viewBox="0 0 24 24">
+                  <path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.28 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.75M6.88 8.56a1.68 1.68 0 0 0 1.68-1.68c0-.93-.75-1.69-1.68-1.69a1.69 1.69 0 0 0-1.69 1.69c0 .93.76 1.68 1.69 1.68m1.39 9.94v-8.37H5.5v8.37h2.77z"/>
+                </svg>
+                Continue with LinkedIn
+              </button>
+
               {/* Google OAuth Button */}
               <button
                 type="button"

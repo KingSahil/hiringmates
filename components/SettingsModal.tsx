@@ -17,7 +17,7 @@ export function SettingsModal() {
   const { user, isSettingsOpen, setIsSettingsOpen } = useAuth()
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedAccount[]>([])
   const [loading, setLoading] = useState(false)
-  const [providerType, setProviderType] = useState<'github_secondary' | 'email_secondary' | 'custom'>('github_secondary')
+  const [providerType, setProviderType] = useState<'github_secondary' | 'linkedin' | 'email_secondary' | 'custom'>('github_secondary')
   const [identifier, setIdentifier] = useState('')
   const [label, setLabel] = useState('')
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -258,6 +258,7 @@ export function SettingsModal() {
                 className="w-full cursor-pointer rounded-xl border-2 border-[#171717] bg-white px-2.5 py-2 text-xs font-bold text-[#171717] shadow-xs outline-none dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7]"
               >
                 <option value="github_secondary">Secondary GitHub Handle</option>
+                <option value="linkedin">LinkedIn Profile URL</option>
                 <option value="email_secondary">Secondary Work/Personal Email</option>
                 <option value="custom">Other Identity</option>
               </select>
@@ -270,7 +271,7 @@ export function SettingsModal() {
                 type="text"
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
-                placeholder="e.g. Work GitHub, Personal"
+                placeholder="e.g. Work GitHub, LinkedIn, Personal"
                 className="w-full rounded-xl border-2 border-[#171717] bg-white px-2.5 py-2 text-xs font-bold text-[#171717] shadow-xs outline-none dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7]"
               />
             </div>
@@ -278,7 +279,11 @@ export function SettingsModal() {
 
           <div>
             <label className="mb-1 block text-[10px] font-black uppercase text-[#171717]/70 dark:text-[#a1a1aa]">
-              {providerType === 'github_secondary' ? 'Secondary GitHub Username or Org Handle' : 'Account Identifier / Email'}
+              {providerType === 'github_secondary'
+                ? 'Secondary GitHub Username or Org Handle'
+                : providerType === 'linkedin'
+                  ? 'LinkedIn Profile URL (e.g. linkedin.com/in/username)'
+                  : 'Account Identifier / Email'}
             </label>
             <div className="flex gap-2">
               <input
@@ -286,7 +291,13 @@ export function SettingsModal() {
                 required
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                placeholder={providerType === 'github_secondary' ? 'e.g. @work-developer or octocat' : 'e.g. engineer@work.com'}
+                placeholder={
+                  providerType === 'github_secondary'
+                    ? 'e.g. @work-developer or octocat'
+                    : providerType === 'linkedin'
+                      ? 'https://www.linkedin.com/in/yourname'
+                      : 'e.g. engineer@work.com'
+                }
                 className="flex-1 rounded-xl border-2 border-[#171717] bg-white px-3 py-2 text-xs font-bold text-[#171717] shadow-xs outline-none dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7]"
               />
               <button
