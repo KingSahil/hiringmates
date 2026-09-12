@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hiringmates-rag-backend"
+version = "0.1.0"
+description = "Multi-scenario RAG backend for candidate profiling and assessment"
+requires-python = ">=3.11"
+dependencies = [
+    # models
+    "pydantic>=2.7",
+    # config
+    "python-dotenv>=1.0.0",
+    # LLM (Gemini)
+    "google-genai>=1.0.0",
+    # persistence
+    "supabase>=2.0.0",
+]
+
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
+# Install only the provider you actually use.
+llm-gemini = [
+    "google-genai>=1.0.0",
+]
+llm-openai = [
+    "openai>=1.40.0",
+]
+llm-anthropic = [
+    "anthropic>=0.34.0",
+]
+dev = [
+    "pytest>=7.4.0",
+]
+
+[tool.setuptools]
+packages = ["rag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

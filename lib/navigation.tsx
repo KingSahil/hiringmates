@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 
-export type AppTab = 'home' | 'hireme' | 'codemates' | 'mentorship'
+export type AppTab = 'home' | 'hireme' | 'codemates' | 'mentorship' | 'assessment'
 
 interface NavigationContextType {
   tab: AppTab
@@ -20,6 +20,7 @@ function getTabFromPath(): AppTab {
   if (path.includes('hireme')) return 'hireme'
   if (path.includes('codemates')) return 'codemates'
   if (path.includes('mentorship')) return 'mentorship'
+  if (path.includes('assessment')) return 'assessment'
   return 'home'
 }
 

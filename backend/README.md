@@ -1,0 +1,176 @@
+# RAG backend
+
+Multi-scenario pipeline that turns a GitHub profile into an assessed candidate
+profile. Currently one scenario: `candidate-onboarding`.
+
+```
+POST /sessions              create -> 202, status "pending"
+GET  /sessions/{id}         poll until "awaiting" (questions ready)
+POST /sessions/{id}/answers submit -> grades -> "complete"
+GET  /profiles/{user_id}    fetch the finished profile
+GET  /health                liveness + config problems
+```
+
+Extraction is slow (roughly 5-28s by repository count), so creation returns
+immediately and the work runs in the background. Poll; do not block.
+
+## Choosing an LLM provider
+
+Set `LLM_PROVIDER` to `gemini` (default), `openai`, or `anthropic`. Only the
+active provider's key is required — see `.env.example`.
+
+| Provider | Endpoint | Notes |
+|---|---|---|
+| `gemini` | Google GenAI | Default. `gemini-3.7-flash`. Has a real JSON mode. |
+| `openai` | Any OpenAI chat-completions endpoint | Set `OPENAI_BASE_URL` for OpenRouter, Groq, Together, Fireworks, vLLM, Ollama, LM Studio. Leave blank for `api.openai.com`. Sends `response_format={"type":"json_object"}`; set `OPENAI_JSON_MODE=0` if the server rejects it. |
+| `anthropic` | Anthropic Messages API or a proxy | `max_tokens` is always sent (the API requires it). There is **no JSON mode**, so output correctness rests on the guardrails prompt. |
+
+All three funnel through one `LLMClient.complete_model` call, so the pipeline
+is provider-agnostic. Output is parsed defensively — fenced ```json blocks are
+stripped, and anything unparseable raises `LLMError` rather than silently
+degrading.
+
+**Anthropic caveat worth knowing:** with no JSON mode, a small model is more
+likely to wrap prose around its JSON. If you see `LLMError: ... returned
+non-JSON output`, prefer a larger Anthropic model or switch provider.
+
+### Working example: OmniRoute
+
+The current local setup routes through **OmniRoute**, an OpenAI-compatible
+gateway on `127.0.0.1:20128`:
+
+```
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=http://127.0.0.1:20128/api/v1
+OPENAI_MODEL=antigravity/gemini-3.7-flash-high
+```
+
+Note the `/api/v1` prefix — the gateway serves `/api/v1/models` and
+`/api/v1/chat/completions`, not `/v1/...`. Verified live: the model exists among
+233 exposed, and a real `complete_model` call returns a validated `RoughProfile`.
+
+**The schema must be in the prompt.** A vague instruction makes the model invent
+its own field names (observed: it returned `language_distribution` instead of
+the requested fields) and the call fails with `LLMError`. Every scenario's
+instruction states its fields explicitly — keep it that way.
+
+## Database setup
+
+Apply the migration before running against a real Supabase project:
+
+```bash
+psql "$SUPABASE_URL" -f migrations/001_init.sql
+```
+
+Four tables:
+
+| Table | Purpose | Retention |
+|---|---|---|
+| `extractions` | Cached detector reports, keyed by `github_email\|google_email` | Short — gated by `EXTRACTION_TTL_DAYS` |
+| `sessions` | One onboarding run; `payload` is the whole Session as jsonb | Short — polling state |
+| `candidate_profiles` | The durable assessed profile | **Long — outlives the extraction TTL** |
+| `served_questions` | Prompts already served, for anti-repeat | Long — needed for dedupe |
+
+RLS is enabled on all four. `extractions` intentionally has **no** user-facing
+policy, so anon/authenticated get nothing; only the service role can read it.
+
+Reminder: the service role bypasses RLS, so these policies are defence in depth,
+not the isolation boundary.
+
+## Layout
+
+| Path | Role |
+|---|---|
+| `rag/models.py` | Domain models. `Identity` is supplied by auth, never derived here. |
+| `rag/scenarios.py` | Scenario registry. Adding a scenario is adding an entry. |
+| `rag/llm.py` | `LLMClient` interface + Gemini, OpenAI-compatible, Anthropic-compatible and fake implementations. |
+| `rag/store.py` | `Store` interface + in-memory and Supabase implementations. |
+| `rag/pipeline.py` | The stage machine. |
+| `rag/config.py` | Env-driven settings. |
+| `api.py` | HTTP surface (needs the `api` extra). |
+
+## Run
+
+```bash
+pip install -e ".[api,dev]"
+cp .env.example .env    # fill in GEMINI_API_KEY and Supabase service role
+uvicorn api:app --reload
+```
+
+Tests need no credentials:
+
+```bash
+pytest -q
+```
+
+## Design notes
+
+**Deterministic where possible.** MCQ answers are known, so they are scored in
+code. Only profiling, question generation, and the one theory answer go to the
+model. This keeps the high-variance, expensive step as small as possible.
+
+**Timing is server-recorded.** `served_at` is stamped when questions go out and
+elapsed time is computed on receipt. A client-supplied duration would be
+trivially faked.
+
+**Two lifetimes, not one.** `EXTRACTION_TTL_DAYS` (30) gates *re-extraction*.
+Enhanced profiles persist beyond it — they are the expensive artifact.
+
+**Anti-repeat is retrieval, not seeding.** A seed does not prevent cheating;
+question reuse does. Previously served prompts are passed to the model and it
+is told to avoid them. Later this becomes a pgvector similarity check.
+
+**Auth is out of scope here.** The backend trusts the `Identity` it is given.
+When Supabase auth lands in front of this service it produces that object.
+
+## Wiring auth (for whoever builds it)
+
+`app/auth/callback/route.ts` already calls `exchangeCodeForSession`, so the
+server half is in place. The missing piece is **initiation** — nothing currently
+calls `signInWithOAuth`, so no `code` ever reaches that route.
+
+Once OAuth is initiated, map the Supabase session onto `Identity`:
+
+| `Identity` field | Source |
+|---|---|
+| `user_id` | `session.user.id` |
+| `github_handle` | identity with `provider === 'github'` → `identity_data.user_name` |
+| `github_email` | same identity → `identity_data.email` |
+| `google_email` | identity with `provider === 'google'` → `identity_data.email` |
+| `provider_token` | `session.provider_token` |
+
+Notes that matter:
+
+- **Both emails are required**, because the extraction cache is keyed on the
+  pair. That means the user must have *both* GitHub and Google linked before
+  onboarding completes; otherwise the cache key is partial and never hits.
+- **`provider_token` is only present for the provider just used**, and is not
+  persisted across sessions. Store it encrypted server-side if you want
+  post-TTL re-extraction to avoid the anonymous 60 req/hr cap.
+- Call `POST /sessions` from a **server** context (route handler or server
+  action), never the browser — it carries the service-role path and the token.
+
+```jsonc
+POST /sessions
+{
+  "identity": {
+    "user_id": "...",
+    "github_email": "...",
+    "google_email": "...",
+    "github_handle": "...",
+    "provider_token": "..."
+  },
+  "scenario": "candidate-onboarding"
+}
+```
+
+Then poll `GET /sessions/{id}` until `status` is `awaiting`.
+
+## Not verified in this environment
+
+- Gemini calls (no API key present)
+- Supabase reads/writes (no service-role key present)
+- `api.py` at runtime (`fastapi` not installed)
+
+The pipeline, cache, scoring and timing logic are covered by 26 tests that run
+without any credentials.

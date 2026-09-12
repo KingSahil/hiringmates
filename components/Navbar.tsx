@@ -1,6 +1,7 @@
 'use client'
 
-import { Zap, LogOut, Sun, Moon, Settings } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Zap, LogOut, Sun, Moon, Settings, ClipboardList } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useTheme } from '@/lib/theme'
@@ -82,6 +83,17 @@ export function Navbar() {
                 <Settings className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Settings</span>
               </button>
+
+              {/* Candidate assessment */}
+              <a
+                href="/assessment"
+                onClick={(e) => navigateTo('assessment', e)}
+                className="flex cursor-pointer items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-[#ffd84d] px-2.5 py-1.5 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:bg-[#f5c518] dark:border-[#2e323b] dark:shadow-[2px_2px_0_#000000]"
+                title="Candidate assessment"
+              >
+                <ClipboardList className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Assessment</span>
+              </a>
 
               {/* User Identity Pill */}
               <div className="flex items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-white px-2.5 py-1.5 shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:shadow-[2px_2px_0_#000000]">
