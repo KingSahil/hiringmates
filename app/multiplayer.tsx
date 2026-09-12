@@ -12,15 +12,43 @@ type Room = { id: string; code: string; title: string; status: string; host_id: 
 function Back({ onClick, label }: { onClick: () => void; label: string }) { return <button onClick={onClick} className="mb-8 flex items-center gap-2 text-sm text-white/45 hover:text-white"><ArrowLeft className="size-4" />{label}</button> }
 
 export function AuthPage({ nav }: { nav: Nav }) {
-  const supabase = getSupabaseBrowserClient()
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const submit = async (event: React.FormEvent) => { event.preventDefault(); setBusy(true); setMessage(''); const result = mode === 'sign-in' ? await supabase.auth.signInWithPassword({ email, password }) : await supabase.auth.signUp({ email, password, options: { data: { display_name: name || 'Candidate' }, emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback` } }); setMessage(result.error ? (result.error.message.includes('Invalid') ? 'Invalid email or password.' : result.error.message) : mode === 'sign-up' ? 'Check your email to confirm your account.' : 'Signed in.'); setBusy(false); if (!result.error && mode === 'sign-in') nav('codemates') }
-  return <div className="mx-auto flex min-h-[calc(100vh-120px)] max-w-5xl items-center justify-center"><div className="grid w-full max-w-4xl gap-8 lg:grid-cols-[.9fr_1.1fr]"><div className="py-8"><div className="font-mono text-xs uppercase tracking-[.22em] text-cyan-300">HireMe.app identity</div><h1 className="mt-4 font-mono text-5xl font-bold tracking-tight sm:text-7xl">Bring your<br /><span className="text-fuchsia-300">best build.</span></h1><p className="mt-5 max-w-md text-sm leading-7 text-white/50">Create one account for applications, live CodeMates rooms, shared editor sessions, and your score history.</p><button onClick={() => nav('home')} className="mt-8 text-sm text-white/45 underline">Back to landing</button></div><form onSubmit={submit} className="border-2 border-[#5b4635] bg-[#f4ead0] p-6 text-[#18202b] shadow-[6px_6px_0_#d9362b] sm:p-8"><div className="font-mono text-xs uppercase tracking-[.2em] text-[#685744]">{mode === 'sign-in' ? 'Welcome back' : 'Create candidate account'}</div><h2 className="mt-3 font-mono text-3xl font-bold">{mode === 'sign-in' ? 'Sign in to play.' : 'Join the room.'}</h2><div className="mt-7 grid gap-4">{mode === 'sign-up' && <label className="grid gap-2 text-sm font-semibold">Display name<input value={name} onChange={e => setName(e.target.value)} className="border-2 border-[#5b4635] bg-[#fffaf0] px-3 py-3 outline-none" placeholder="Maya Chen" /></label>}<label className="grid gap-2 text-sm font-semibold">Email<input required value={email} onChange={e => setEmail(e.target.value)} type="email" className="border-2 border-[#5b4635] bg-[#fffaf0] px-3 py-3 outline-none" placeholder="you@example.com" /></label><label className="grid gap-2 text-sm font-semibold">Password<input required minLength={6} value={password} onChange={e => setPassword(e.target.value)} type="password" className="border-2 border-[#5b4635] bg-[#fffaf0] px-3 py-3 outline-none" placeholder="6+ characters" /></label></div>{message && <p className="mt-4 text-sm text-[#d9362b]">{message}</p>}<button disabled={busy} className="mt-6 flex w-full items-center justify-center gap-2 bg-[#18202b] px-4 py-3 font-semibold text-[#f4ead0] disabled:opacity-50">{busy ? 'Working…' : mode === 'sign-in' ? 'Sign in' : 'Create account'} <ArrowRight className="size-4" /></button><button type="button" onClick={() => setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')} className="mt-5 w-full text-center text-xs underline">{mode === 'sign-in' ? 'New here? Create an account' : 'Already have an account? Sign in'}</button></form></div></div>
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setMessage('')
+    const normalizedEmail = email.trim().toLowerCase()
+    const supabase = getSupabaseBrowserClient()
+    const result = mode === 'sign-in'
+      ? await supabase.auth.signInWithPassword({ email: normalizedEmail, password })
+      : await supabase.auth.signUp({ email: normalizedEmail, password, options: { data: { display_name: name.trim() || 'Candidate' }, emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback` } })
+    const errorMessage = result.error?.message.toLowerCase() ?? ''
+    if (result.error) {
+      if (errorMessage.includes('email not confirmed')) setMessage('Confirm your email first, then sign in. Check spam or request a new confirmation email below.')
+      else if (errorMessage.includes('invalid login credentials')) setMessage('Invalid email or password. If you created this account recently, confirm your email first.')
+      else if (errorMessage.includes('rate limit')) setMessage('Too many attempts. Wait a moment and try again.')
+      else setMessage('We could not complete sign in. Check your details and try again.')
+    } else {
+      setMessage(mode === 'sign-up' ? 'Check your email to confirm your account.' : 'Signed in.')
+      if (mode === 'sign-in') nav('codemates')
+    }
+    setBusy(false)
+  }
+  const resendConfirmation = async () => {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!normalizedEmail) return setMessage('Enter your email first.')
+    setBusy(true)
+    const supabase = getSupabaseBrowserClient()
+    const { error } = await supabase.auth.resend({ type: 'signup', email: normalizedEmail, options: { emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback` } })
+    setMessage(error ? 'We could not resend the email. Wait a moment and try again.' : 'Confirmation email sent. Check your inbox and spam folder.')
+    setBusy(false)
+  }
+  return <div className="mx-auto flex min-h-[calc(100vh-120px)] max-w-5xl items-center justify-center"><div className="grid w-full max-w-4xl gap-8 lg:grid-cols-[.9fr_1.1fr]"><div className="py-8"><div className="font-mono text-xs uppercase tracking-[.22em] text-cyan-300">HireMe.app identity</div><h1 className="mt-4 font-mono text-5xl font-bold tracking-tight sm:text-7xl">Bring your<br /><span className="text-fuchsia-300">best build.</span></h1><p className="mt-5 max-w-md text-sm leading-7 text-white/50">Create one account for applications, live CodeMates rooms, shared editor sessions, and your score history.</p><button onClick={() => nav('home')} className="mt-8 text-sm text-white/45 underline">Back to landing</button></div><form onSubmit={submit} className="border-2 border-[#5b4635] bg-[#f4ead0] p-6 text-[#18202b] shadow-[6px_6px_0_#d9362b] sm:p-8"><div className="font-mono text-xs uppercase tracking-[.2em] text-[#685744]">{mode === 'sign-in' ? 'Welcome back' : 'Create candidate account'}</div><h2 className="mt-3 font-mono text-3xl font-bold">{mode === 'sign-in' ? 'Sign in to play.' : 'Join the room.'}</h2><div className="mt-7 grid gap-4">{mode === 'sign-up' && <label className="grid gap-2 text-sm font-semibold">Display name<input value={name} onChange={e => setName(e.target.value)} className="border-2 border-[#5b4635] bg-[#fffaf0] px-3 py-3 outline-none" placeholder="Maya Chen" /></label>}<label className="grid gap-2 text-sm font-semibold">Email<input required value={email} onChange={e => setEmail(e.target.value)} type="email" className="border-2 border-[#5b4635] bg-[#fffaf0] px-3 py-3 outline-none" placeholder="you@example.com" /></label><label className="grid gap-2 text-sm font-semibold">Password<input required minLength={6} value={password} onChange={e => setPassword(e.target.value)} type="password" className="border-2 border-[#5b4635] bg-[#fffaf0] px-3 py-3 outline-none" placeholder="6+ characters" /></label></div>{message && <p className="mt-4 text-sm text-[#d9362b]">{message}</p>}<button disabled={busy} className="mt-6 flex w-full items-center justify-center gap-2 bg-[#18202b] px-4 py-3 font-semibold text-[#f4ead0] disabled:opacity-50">{busy ? 'Working…' : mode === 'sign-in' ? 'Sign in' : 'Create account'} <ArrowRight className="size-4" /></button><button type="button" onClick={() => setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')} className="mt-5 w-full text-center text-xs underline">{mode === 'sign-in' ? 'New here? Create an account' : 'Already have an account? Sign in'}</button>{mode === 'sign-in' && <button type="button" onClick={resendConfirmation} disabled={busy} className="mt-3 text-left text-xs underline disabled:opacity-50">Resend confirmation email</button>}</form></div></div>
 }
 
 export function RealRooms({ nav, onJoin }: { nav: Nav; onJoin: (room: Room) => void }) {
