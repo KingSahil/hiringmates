@@ -14,13 +14,33 @@ GET  /health                liveness + config problems
 Extraction is slow (roughly 5-28s by repository count), so creation returns
 immediately and the work runs in the background. Poll; do not block.
 
+## Choosing an LLM provider
+
+Set `LLM_PROVIDER` to `gemini` (default), `openai`, or `anthropic`. Only the
+active provider's key is required — see `.env.example`.
+
+| Provider | Endpoint | Notes |
+|---|---|---|
+| `gemini` | Google GenAI | Default. `gemini-3.7-flash`. Has a real JSON mode. |
+| `openai` | Any OpenAI chat-completions endpoint | Set `OPENAI_BASE_URL` for OpenRouter, Groq, Together, Fireworks, vLLM, Ollama, LM Studio. Leave blank for `api.openai.com`. Sends `response_format={"type":"json_object"}`; set `OPENAI_JSON_MODE=0` if the server rejects it. |
+| `anthropic` | Anthropic Messages API or a proxy | `max_tokens` is always sent (the API requires it). There is **no JSON mode**, so output correctness rests on the guardrails prompt. |
+
+All three funnel through one `LLMClient.complete_model` call, so the pipeline
+is provider-agnostic. Output is parsed defensively — fenced ```json blocks are
+stripped, and anything unparseable raises `LLMError` rather than silently
+degrading.
+
+**Anthropic caveat worth knowing:** with no JSON mode, a small model is more
+likely to wrap prose around its JSON. If you see `LLMError: ... returned
+non-JSON output`, prefer a larger Anthropic model or switch provider.
+
 ## Layout
 
 | Path | Role |
 |---|---|
 | `rag/models.py` | Domain models. `Identity` is supplied by auth, never derived here. |
 | `rag/scenarios.py` | Scenario registry. Adding a scenario is adding an entry. |
-| `rag/llm.py` | `LLMClient` interface + Gemini and fake implementations. |
+| `rag/llm.py` | `LLMClient` interface + Gemini, OpenAI-compatible, Anthropic-compatible and fake implementations. |
 | `rag/store.py` | `Store` interface + in-memory and Supabase implementations. |
 | `rag/pipeline.py` | The stage machine. |
 | `rag/config.py` | Env-driven settings. |

@@ -29,7 +29,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from rag.config import load_settings
-from rag.llm import GeminiLLM, LLMClient
+from rag.llm import LLMClient, build_llm
 from rag.models import Answer, Identity
 from rag.pipeline import Pipeline, SubprocessDetector
 from rag.scenarios import DEFAULT_SCENARIO, list_scenarios
@@ -60,7 +60,7 @@ def _store(settings) -> Store:
 
 def _pipeline() -> Pipeline:
     settings = load_settings()
-    llm: LLMClient = GeminiLLM(settings.gemini_api_key, settings.gemini_model)
+    llm: LLMClient = build_llm(settings)
     return Pipeline(
         llm=llm,
         store=_store(settings),

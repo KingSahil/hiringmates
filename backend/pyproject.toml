@@ -23,6 +23,16 @@ api = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
 ]
+# Install only the provider you actually use.
+llm-gemini = [
+    "google-genai>=1.0.0",
+]
+llm-openai = [
+    "openai>=1.40.0",
+]
+llm-anthropic = [
+    "anthropic>=0.34.0",
+]
 dev = [
     "pytest>=7.4.0",
 ]

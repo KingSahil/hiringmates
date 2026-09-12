@@ -24,6 +24,10 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 DETECTOR_CLI = str(_REPO_ROOT / "tools" / "github-detector" / "scripts" / "detect_cli.py")
 
 
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
+
+
 def _int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -31,13 +35,49 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if raw in _TRUE:
+        return True
+    if raw in _FALSE:
+        return False
+    return default
+
+
 @dataclass
 class Settings:
     # --- LLM ---
+    # Which provider to use: gemini | openai | anthropic.
+    llm_provider: str = field(
+        default_factory=lambda: os.getenv("LLM_PROVIDER", "gemini").strip().lower())
+
+    # Gemini (default)
     gemini_api_key: str = field(
         default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_model: str = field(
         default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.7-flash"))
+
+    # OpenAI-compatible. Leave base_url unset for api.openai.com; set it for
+    # OpenRouter, Groq, Together, vLLM, Ollama, LM Studio, etc.
+    openai_api_key: str = field(
+        default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    openai_model: str = field(
+        default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    openai_base_url: str = field(
+        default_factory=lambda: os.getenv("OPENAI_BASE_URL", ""))
+    openai_json_mode: bool = field(
+        default_factory=lambda: _bool("OPENAI_JSON_MODE", True))
+
+    # Anthropic-compatible. Leave base_url unset for api.anthropic.com.
+    anthropic_api_key: str = field(
+        default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
+    anthropic_model: str = field(
+        default_factory=lambda: os.getenv("ANTHROPIC_MODEL",
+                                          "claude-sonnet-4-5"))
+    anthropic_base_url: str = field(
+        default_factory=lambda: os.getenv("ANTHROPIC_BASE_URL", ""))
+    anthropic_max_tokens: int = field(
+        default_factory=lambda: _int("ANTHROPIC_MAX_TOKENS", 4096))
 
     # --- Supabase (service role; bypasses RLS) ---
     supabase_url: str = field(
@@ -55,10 +95,27 @@ class Settings:
     detector_timeout_seconds: float = 180.0
 
     def validate(self) -> list[str]:
-        """Return a list of problems. Empty means usable."""
+        """
+        Return a list of problems. Empty means usable.
+
+        Only the ACTIVE provider's credentials are required — configuring one
+        provider must not demand keys for the others.
+        """
         problems: list[str] = []
-        if not self.gemini_api_key:
-            problems.append("GEMINI_API_KEY is not set")
+
+        provider = self.llm_provider
+        if provider == "gemini" and not self.gemini_api_key:
+            problems.append("LLM_PROVIDER=gemini but GEMINI_API_KEY is not set")
+        elif provider == "openai" and not self.openai_api_key:
+            problems.append("LLM_PROVIDER=openai but OPENAI_API_KEY is not set")
+        elif provider == "anthropic" and not self.anthropic_api_key:
+            problems.append(
+                "LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
+        elif provider not in ("gemini", "openai", "anthropic"):
+            problems.append(
+                f"LLM_PROVIDER={provider!r} is not one of "
+                "gemini | openai | anthropic")
+
         if not self.supabase_url or not self.supabase_service_role_key:
             problems.append(
                 "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set "
