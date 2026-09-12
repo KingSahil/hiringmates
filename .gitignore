@@ -26,3 +26,6 @@ venv/
 .pytest_tmp/
 # Clone cache for the repository analysis pass
 tools/github-detector/data/
+# TypeScript incremental build info (regenerated on every build)
+tsconfig.tsbuildinfo
+next-env.d.ts.bak
