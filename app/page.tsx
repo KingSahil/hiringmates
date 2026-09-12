@@ -1,7 +1,8 @@
 'use client'
 
 import Editor from '@monaco-editor/react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { ArrowLeft, ArrowRight, Bell, Check, ClipboardCheck, Code2, Copy, Gamepad2, LockKeyhole, Play, Plus, Radio, Send, ShieldCheck, Timer, Trophy, Users, Video, Wifi, X, Zap } from 'lucide-react'
 
 type View = 'home' | 'profile' | 'hireme' | 'admin' | 'check' | 'assessment' | 'codemates' | 'codemates-brief' | 'codemates-check' | 'rooms' | 'lobby' | 'game' | 'results'
@@ -17,14 +18,40 @@ export default function Home() {
   const [chat, setChat] = useState('')
   const [messages, setMessages] = useState(['Maya: Let’s split the edge cases.', 'Alex: I’ll check the test runner.'])
   const [roomCode, setRoomCode] = useState('ASYNC-77')
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient()
+    supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null))
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUserEmail(session?.user?.email ?? null))
+    return () => listener.subscription.unsubscribe()
+  }, [])
   const nav = (next: View) => { setView(next); setPaused(false) }
   const joinLobby = (code: string) => { setRoomCode(code.trim().toUpperCase() || 'ASYNC-77'); nav('lobby') }
   const sendMessage = () => { if (!chat.trim()) return; setMessages([...messages, `You: ${chat.trim()}`]); setChat('') }
   return <main className={`min-h-screen transition-colors ${light ? 'bg-[#f4ead0] text-[#18202b]' : 'bg-[#10131d] text-[#f7f0dc]'}`}>
     {view !== 'home' && <header className="border-b-4 border-[#4d3b2b] bg-[#f4ead0] px-5 py-3 text-[#18202b]"><div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4"><button onClick={() => nav('home')} className="flex items-center gap-3 text-left"><span className="grid size-9 place-items-center border-2 border-[#4d3b2b] bg-[#e8a33a] text-[#18202b]"><Zap className="size-5 fill-current" /></span><span className="font-mono text-sm font-bold">HireMe<span className="text-[#d45b32]">.app</span></span></button><div className="flex items-center gap-2"><button onClick={() => setLight(!light)} className="border-2 border-[#4d3b2b] px-3 py-2 font-mono text-xs">{light ? 'DARK' : 'LIGHT'}</button></div></div></header>}
-    <div className="mx-auto max-w-[1440px]">{view === 'home' && <Landing nav={nav} />}{view === 'profile' && <CandidateIntake nav={nav} />}{view === 'hireme' && <HireInvite nav={nav} />}{view === 'admin' && <AdminPortal nav={nav} />}{view === 'check' && <SystemCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'assessment' && <Assessment question={question} setQuestion={setQuestion} paused={paused} setPaused={setPaused} nav={nav} />}{view === 'codemates' && <CodeMatesHome nav={nav} joinLobby={joinLobby} />}{view === 'codemates-brief' && <CodeMatesBrief nav={nav} />}{view === 'codemates-check' && <CodeMatesCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'rooms' && <LiveRooms nav={nav} joinLobby={joinLobby} />}{view === 'lobby' && <Lobby nav={nav} roomCode={roomCode} />}{view === 'game' && <Game chat={chat} setChat={setChat} messages={messages} sendMessage={sendMessage} nav={nav} />}{view === 'results' && <Results nav={nav} />}</div>
+    <div className="mx-auto max-w-[1440px]">{view === 'home' && <><Landing nav={nav} /><AuthPanel userEmail={userEmail} /></>}{view === 'profile' && <CandidateIntake nav={nav} />}{view === 'hireme' && <HireInvite nav={nav} />}{view === 'admin' && <AdminPortal nav={nav} />}{view === 'check' && <SystemCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'assessment' && <Assessment question={question} setQuestion={setQuestion} paused={paused} setPaused={setPaused} nav={nav} />}{view === 'codemates' && <CodeMatesHome nav={nav} joinLobby={joinLobby} />}{view === 'codemates-brief' && <CodeMatesBrief nav={nav} />}{view === 'codemates-check' && <CodeMatesCheck ready={ready} setReady={setReady} nav={nav} />}{view === 'rooms' && <LiveRooms nav={nav} joinLobby={joinLobby} />}{view === 'lobby' && <Lobby nav={nav} roomCode={roomCode} />}{view === 'game' && <Game chat={chat} setChat={setChat} messages={messages} sendMessage={sendMessage} nav={nav} />}{view === 'results' && <Results nav={nav} />}</div>
   </main>
 }
+function AuthPanel({ userEmail }: { userEmail: string | null }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    setBusy(true); setError('')
+    const supabase = getSupabaseBrowserClient()
+    const result = mode === 'sign-in'
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback` } })
+    if (result.error) setError(result.error.message.includes('Invalid') ? 'Invalid email or password.' : 'Unable to complete authentication.')
+    setBusy(false)
+  }
+  if (userEmail) return <div className="mx-auto mb-8 flex max-w-5xl items-center justify-between border-2 border-[#4d3b2b] bg-[#f4ead0] px-4 py-3 font-mono text-xs text-[#18202b]"><span>SIGNED IN · {userEmail}</span><button onClick={() => getSupabaseBrowserClient().auth.signOut()} className="border-2 border-[#18202b] px-3 py-2">SIGN OUT</button></div>
+  return <section className="mx-auto mb-8 max-w-5xl border-2 border-[#4d3b2b] bg-[#f4ead0] p-5 text-[#18202b]"><div className="flex flex-wrap items-end gap-3"><label className="grid flex-1 gap-1 font-mono text-xs">EMAIL<input value={email} onChange={e => setEmail(e.target.value)} type="email" className="border-2 border-[#4d3b2b] bg-[#fff9e8] px-3 py-2" /></label><label className="grid flex-1 gap-1 font-mono text-xs">PASSWORD<input value={password} onChange={e => setPassword(e.target.value)} type="password" className="border-2 border-[#4d3b2b] bg-[#fff9e8] px-3 py-2" /></label><button disabled={busy} onClick={submit} className="border-2 border-[#18202b] bg-[#18202b] px-4 py-3 font-mono text-xs text-[#f4ead0]">{busy ? 'WORKING…' : mode === 'sign-in' ? 'SIGN IN' : 'CREATE ACCOUNT'}</button><button onClick={() => setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in')} className="px-2 py-3 font-mono text-xs underline">{mode === 'sign-in' ? 'New candidate?' : 'Already registered?'}</button></div>{error && <p className="mt-3 font-mono text-xs text-[#d9362b]">{error}</p>}<p className="mt-3 font-mono text-[10px] text-[#685744]">Sign in to save applications, join rooms, submit code, and access recruiter data.</p></section>
+}
+
 function Kicker({ children, pink = false }: { children: React.ReactNode; pink?: boolean }) { return <div className={`mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[.22em] ${pink ? 'text-fuchsia-300' : 'text-cyan-300'}`}><span className="size-1.5 rounded-full bg-current" />{children}</div> }
 function Button({ children, onClick, pink = false, ghost = false, disabled = false }: { children: React.ReactNode; onClick?: () => void; pink?: boolean; ghost?: boolean; disabled?: boolean }) { return <button onClick={onClick} disabled={disabled} className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-40 ${ghost ? 'border border-white/15 text-white/75 hover:bg-white/10' : pink ? 'bg-fuchsia-400 text-[#190b1b] hover:bg-fuchsia-300' : 'bg-cyan-300 text-[#061017] hover:bg-cyan-200'}`}>{children}</button> }
 function Landing({ nav }: { nav: (v: View) => void }) { return <section className="landing-shell"><div className="landing-topbar"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center border-2 border-[#4d3b2b] bg-[#e8a33a] text-[#18202b]"><Zap className="size-5 fill-current" /></span><span className="font-mono text-sm font-bold tracking-tight">hireme<span className="text-[#d45b32]">.app</span></span></div><div className="hidden items-center gap-5 font-mono text-[11px] uppercase tracking-[.18em] text-[#685744] sm:flex"><span>workspace_01</span><span className="size-2 rounded-full bg-[#4d9a6a]" /><span>online</span></div></div><div className="landing-intro"><div className="font-mono text-xs uppercase tracking-[.2em] text-[#685744]">Choose your room</div><h1 className="mt-4 text-balance font-mono text-4xl font-bold tracking-[-.08em] sm:text-6xl">Build alone.<br /><span className="text-[#d45b32]">Build together.</span></h1><p className="mt-5 max-w-lg text-sm leading-6 text-[#685744]">A focused home for proving what you can do and finding the people you want to build with.</p></div><div className="landing-choices"><button className="choice-panel choice-hire" onClick={() => nav('profile')}><div className="choice-number">01</div><div><div className="font-mono text-xs uppercase tracking-[.2em] text-[#685744]">For your next opportunity</div><h2 className="mt-3 font-mono text-4xl font-bold">Hire Me</h2><p className="mt-3 max-w-sm text-sm leading-6 text-[#685744]">Show your thinking through a clear, fair assessment built around real work.</p></div><span className="choice-arrow">→</span></button><button className="choice-panel choice-mates" onClick={() => nav('codemates')}><div className="choice-number">02</div><div><div className="font-mono text-xs uppercase tracking-[.2em] text-[#685744]">For your next build session</div><h2 className="mt-3 font-mono text-4xl font-bold">CodeMates</h2><p className="mt-3 max-w-sm text-sm leading-6 text-[#d7c9ad]">Enter a live room, solve problems, and make something memorable with your crew.</p></div><span className="choice-arrow">→</span></button></div><div className="landing-footer"><span>SELECT A PATH TO CONTINUE</span><span className="hidden sm:inline">© 2026 / SKILLS MADE VISIBLE</span></div></section> }
