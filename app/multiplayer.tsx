@@ -65,13 +65,14 @@ export function AuthPage({ nav }: { nav: Nav }) {
     const demoPassword = 'CodeMatesDemo2026!'
     setEmail(demoEmail)
     setPassword(demoPassword)
+    await fetch('/api/demo-account', { method: 'POST' })
     const supabase = getSupabaseBrowserClient()
     const { data, error } = await supabase.auth.signInWithPassword({ email: demoEmail, password: demoPassword })
     if (!error && data.session) {
       setMessage('Demo account signed in.')
       nav('codemates')
     } else {
-      setMessage('The demo account is not provisioned yet. Use Create account or configure this account in Supabase Auth.')
+      setMessage('Demo sign in is temporarily unavailable. Please try again.')
     }
     setBusy(false)
   }
