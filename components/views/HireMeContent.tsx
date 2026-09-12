@@ -1093,8 +1093,8 @@ export function HireMeContent() {
                           height: `${Math.max(12, Math.min(50, gazeStatus.landmarks.foreignObjectBox.height))}%`,
                         }}
                       >
-                        <div className="absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1 py-0.5 text-[7px] font-black text-white">
-                          ⚠️ PHONE / OBJECT DETECTED
+                        <div className="absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1.5 py-0.5 text-[8px] font-black text-white">
+                          {gazeStatus.landmarks.foreignObjectLabel || '⚠️ SMARTPHONE / OBJECT DETECTED'}
                         </div>
                       </div>
                     )}
@@ -1863,8 +1863,8 @@ export function HireMeContent() {
                       height: `${Math.max(12, Math.min(50, gazeStatus.landmarks.foreignObjectBox.height))}%`,
                     }}
                   >
-                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1 py-0.5 text-[7px] font-black text-white">
-                      ⚠️ PHONE / OBJECT
+                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-600 px-1.5 py-0.5 text-[7px] font-black text-white">
+                      {gazeStatus.landmarks.foreignObjectLabel || '⚠️ PHONE / OBJECT'}
                     </div>
                   </div>
                 )}

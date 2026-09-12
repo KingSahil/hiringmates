@@ -1,15 +1,15 @@
 /**
  * HiringMates AI Vision Proctoring Engine
  * 
- * Powered by Google MediaPipe FaceLandmarker (478 3D Mesh Landmarks):
- * - Full Anatomical Face Bounding Box: Hugs forehead, cheeks, jawline & chin with zero background bleed
- * - Exact Dual-Eye Pupil / Iris Localization: Landmark 468 (Left Iris) & Landmark 473 (Right Iris)
- * - 3D Projective Head Pose Estimation:
- *   - Pitch: True vertical tilt (detects phone on lap / under desk)
- *   - Yaw: True horizontal rotation (detects glancing at 2nd monitor or companion)
- *   - Roll: True sideways tilt
- * - Multi-Person Detection: True 3D multi-face recognition (detects secondary intruders in room)
- * - Foreign Object & Phone Detection: High-contrast rectangular edge analysis in interaction zone
+ * Powered by Google MediaPipe:
+ * - 478 3D Landmark FaceMesh: Exact anatomical face contour, hairline to chin
+ * - True Dual-Iris Pupil Localization: Landmark 468 (Left Iris) & 473 (Right Iris)
+ * - 3D Projective Head Pose: Pitch (phone on lap), Yaw (2nd monitor), Roll (head tilt)
+ * - AI Object Detection (EfficientDet-Lite0): Real-time deep learning detection of:
+ *   - "cell phone" (smartphones / mobile phones)
+ *   - "book" (cheat sheets / textbooks / notes)
+ *   - "laptop" (secondary computer)
+ * - Multi-Person Detection: True 3D multi-face recognition
  * - Auto-Zero Neutral Calibration: Learns candidate's natural resting baseline
  * - 3-Warning Strike System with sustained deviation timer & auto-termination
  */
@@ -30,6 +30,7 @@ export interface TrackedLandmarks {
   faceBox: { x: number; y: number; width: number; height: number } // percentages 0-100
   secondaryFaceBox?: { x: number; y: number; width: number; height: number }
   foreignObjectDetected: boolean
+  foreignObjectLabel?: string
   foreignObjectBox?: { x: number; y: number; width: number; height: number }
   leftEye: { x: number; y: number } // percentages 0-100
   rightEye: { x: number; y: number } // percentages 0-100
@@ -46,6 +47,7 @@ export interface GazeStatus {
   faceDetected: boolean
   faceCount: number
   foreignObjectDetected: boolean
+  foreignObjectLabel?: string
   warningCount: number
   isSustainedDeviation: boolean
   deviationProgress: number // 0 to 1
@@ -57,13 +59,14 @@ export class EyeTrackerEngine {
   private animFrameId: number | null = null
   private isRunning = false
 
-  // MediaPipe AI instance
+  // MediaPipe AI instances
   private faceLandmarker: any = null
+  private objectDetector: any = null
   private isModelLoading = false
   private modelLoadFailed = false
   private lastVideoTime = -1
 
-  // Fallback Canvas for frame analysis / phone detection
+  // Fallback Canvas for frame analysis / edge detection
   private canvas: HTMLCanvasElement | null = null
   private ctx: CanvasRenderingContext2D | null = null
 
@@ -87,11 +90,12 @@ export class EyeTrackerEngine {
 
   // Foreign object state
   private foreignObjectFrames = 0
+  private currentObjectLabel = ''
 
   // Warning & Deviation State
   private currentDirection: GazeDirection = 'CENTER'
   private deviationFrames = 0
-  private requiredDeviationFrames = 18 // ~1.2 seconds sustained
+  private requiredDeviationFrames = 15 // ~1.0 - 1.2 seconds sustained
   private lastStrikeTime = 0
   private warningCount = 0
   private maxWarnings = 3
@@ -137,17 +141,19 @@ export class EyeTrackerEngine {
   }
 
   /**
-   * Initialize MediaPipe FaceLandmarker
+   * Initialize MediaPipe FaceLandmarker + MediaPipe EfficientDet ObjectDetector
    */
   private async initMediaPipe() {
     if (this.faceLandmarker || this.isModelLoading || this.modelLoadFailed) return
     this.isModelLoading = true
 
     try {
-      const { FilesetResolver, FaceLandmarker } = await import('@mediapipe/tasks-vision')
+      const { FilesetResolver, FaceLandmarker, ObjectDetector } = await import('@mediapipe/tasks-vision')
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
       )
+
+      // 1. Initialize 3D FaceLandmarker
       this.faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath:
@@ -158,6 +164,22 @@ export class EyeTrackerEngine {
         numFaces: 2,
         outputFacialTransformationMatrixes: true,
       })
+
+      // 2. Initialize ObjectDetector (COCO EfficientDet-Lite0 for Phone & Prohibited Hardware)
+      try {
+        this.objectDetector = await ObjectDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.task',
+            delegate: 'GPU',
+          },
+          scoreThreshold: 0.32,
+          runningMode: 'VIDEO',
+        })
+      } catch (errObj) {
+        console.warn('ObjectDetector model initialization failed:', errObj)
+      }
+
       this.isModelLoading = false
     } catch (err) {
       console.warn('MediaPipe initialization fallback to local computer vision:', err)
@@ -178,7 +200,7 @@ export class EyeTrackerEngine {
     this.isRunning = true
     this.deviationFrames = 0
 
-    // Asynchronously load Google MediaPipe in the background
+    // Load AI vision models asynchronously
     this.initMediaPipe().catch(() => {})
 
     const loop = () => {
@@ -201,6 +223,12 @@ export class EyeTrackerEngine {
       } catch {}
       this.faceLandmarker = null
     }
+    if (this.objectDetector) {
+      try {
+        this.objectDetector.close()
+      } catch {}
+      this.objectDetector = null
+    }
     this.canvas = null
     this.ctx = null
     this.videoElement = null
@@ -215,7 +243,6 @@ export class EyeTrackerEngine {
       return
     }
 
-    // Route to MediaPipe Deep Learning when loaded
     if (this.faceLandmarker) {
       this.processWithMediaPipe()
     } else {
@@ -224,7 +251,7 @@ export class EyeTrackerEngine {
   }
 
   /**
-   * Precision MediaPipe FaceMesh processing (478 3D landmarks)
+   * MediaPipe 3D Mesh + AI Object Detection Processing
    */
   private processWithMediaPipe() {
     if (!this.videoElement || !this.faceLandmarker) return
@@ -250,14 +277,14 @@ export class EyeTrackerEngine {
           yaw: 0,
           roll: 0,
         }
-        this.handleGazeOutput('LOOKING_AWAY', 0, 0, false, 0, false, landmarks)
+        this.handleGazeOutput('LOOKING_AWAY', 0, 0, false, 0, false, '', landmarks)
         return
       }
 
-      // PRIMARY FACE:
+      // PRIMARY FACE
       const primaryFace = faces[0]
 
-      // Compute exact bounding box hugging all facial landmarks:
+      // Extract exact bounding box around the 478 facial points
       let minX = 1
       let maxX = 0
       let minY = 1
@@ -270,21 +297,17 @@ export class EyeTrackerEngine {
         if (pt.y > maxY) maxY = pt.y
       }
 
-      // Add a modest 4% margin so the box comfortably frames from hair to chin
       const rawBoxX = Math.max(0, minX - 0.03)
       const rawBoxY = Math.max(0, minY - 0.04)
       const rawBoxW = Math.min(1 - rawBoxX, maxX - minX + 0.06)
       const rawBoxH = Math.min(1 - rawBoxY, maxY - minY + 0.08)
 
-      // Smooth face box
       this.smoothFaceBox.x = this.smoothFaceBox.x * 0.70 + rawBoxX * 100 * 0.30
       this.smoothFaceBox.y = this.smoothFaceBox.y * 0.70 + rawBoxY * 100 * 0.30
       this.smoothFaceBox.width = this.smoothFaceBox.width * 0.75 + rawBoxW * 100 * 0.25
       this.smoothFaceBox.height = this.smoothFaceBox.height * 0.75 + rawBoxH * 100 * 0.25
 
-      // EXACT DUAL-EYE PUPIL / IRIS LANDMARKS:
-      // Landmark 468 = Left Iris Center
-      // Landmark 473 = Right Iris Center
+      // EXACT DUAL-EYE IRIS LANDMARKS (468 Left Iris, 473 Right Iris)
       const leftIris = primaryFace[468] || primaryFace[159]
       const rightIris = primaryFace[473] || primaryFace[386]
 
@@ -298,36 +321,31 @@ export class EyeTrackerEngine {
       this.smoothRightEye.x = this.smoothRightEye.x * 0.65 + rawRightEyeX * 0.35
       this.smoothRightEye.y = this.smoothRightEye.y * 0.65 + rawRightEyeY * 0.35
 
-      // 3D PROJECTIVE HEAD POSE ESTIMATION:
-      // Key facial anchors:
-      // Nose Tip = 1, Forehead = 10, Chin = 152, Left Eye Corner = 33, Right Eye Corner = 263
+      // 3D PROJECTIVE HEAD POSE ESTIMATION
       const nose = primaryFace[1]
       const forehead = primaryFace[10]
       const chin = primaryFace[152]
       const eyeL = primaryFace[33]
       const eyeR = primaryFace[263]
 
-      // 1. Roll (Sideways Head Tilt):
-      const dX = (eyeR.x - eyeL.x)
-      const dY = (eyeR.y - eyeL.y)
+      // 1. Roll: Angle between eyes
+      const dX = eyeR.x - eyeL.x
+      const dY = eyeR.y - eyeL.y
       const rawRoll = Math.round(Math.atan2(dY, dX) * (180 / Math.PI))
 
-      // 2. Yaw (Horizontal Head Turn):
-      // Ratio of horizontal distance between nose and both eyes
+      // 2. Yaw: Horizontal turn ratio
       const distToLeft = Math.abs(nose.x - eyeL.x)
       const distToRight = Math.abs(eyeR.x - nose.x)
       const yawRatio = (distToRight - distToLeft) / Math.max(0.01, distToRight + distToLeft)
       const rawYaw = Math.round(yawRatio * 75)
 
-      // 3. Pitch (Vertical Head Tilt):
-      // Distance from nose to forehead vs nose to chin
+      // 3. Pitch: Vertical tilt ratio
       const noseToForehead = Math.abs(nose.y - forehead.y)
       const noseToChin = Math.abs(chin.y - nose.y)
-      // Natural face ratio: noseToForehead is ~0.8 of noseToChin
       const pitchRatio = (noseToForehead - noseToChin * 0.95) / Math.max(0.01, noseToForehead + noseToChin)
       const rawPitch = Math.round(pitchRatio * 90)
 
-      // Auto-Zero Calibration on startup:
+      // Auto-Zero baseline calibration
       if (!this.calibrated) {
         this.sumPitch += rawPitch
         this.sumYaw += rawYaw
@@ -341,7 +359,6 @@ export class EyeTrackerEngine {
         }
       }
 
-      // Zero-calibrated angles
       const calibratedPitch = Math.round(rawPitch - this.baselinePitch)
       const calibratedYaw = Math.round(rawYaw - this.baselineYaw)
       const calibratedRoll = Math.round(rawRoll - this.baselineRoll)
@@ -350,7 +367,7 @@ export class EyeTrackerEngine {
       this.smoothYaw = Math.round(this.smoothYaw * 0.65 + calibratedYaw * 0.35)
       this.smoothRoll = Math.round(this.smoothRoll * 0.65 + calibratedRoll * 0.35)
 
-      // MULTIPLE FACES DETECTION:
+      // MULTIPLE FACES DETECTION
       let secondaryFaceBox: { x: number; y: number; width: number; height: number } | undefined = undefined
       const faceCount = faces.length
 
@@ -374,35 +391,87 @@ export class EyeTrackerEngine {
         }
       }
 
-      // FOREIGN OBJECT / PHONE DETECTION:
-      // Inspect the chest area below chin for handheld high-contrast rectangular edges
-      const isForeignObject = this.checkForeignObject(rawBoxX, rawBoxY + rawBoxH, rawBoxW)
-      let foreignObjectBox: { x: number; y: number; width: number; height: number } | undefined = undefined
+      // AI OBJECT DETECTION (SMARTPHONE / BOOK / LAPTOP DETECTION)
+      let isPhoneDetected = false
+      let detectedObjectLabel = ''
+      let detectedObjectBox: { x: number; y: number; width: number; height: number } | undefined = undefined
 
-      if (isForeignObject) {
-        this.foreignObjectFrames++
-        foreignObjectBox = {
-          x: Math.round((rawBoxX + rawBoxW * 0.1) * 100),
-          y: Math.round((rawBoxY + rawBoxH * 0.85) * 100),
-          width: Math.round(rawBoxW * 0.8 * 100),
-          height: Math.round(rawBoxH * 0.45 * 100),
+      if (this.objectDetector) {
+        try {
+          const objResults = this.objectDetector.detectForVideo(this.videoElement, now)
+          if (objResults && objResults.detections) {
+            for (const det of objResults.detections) {
+              for (const cat of det.categories) {
+                const name = cat.categoryName.toLowerCase()
+                // Prohibited hardware classes in online exams
+                if (
+                  name === 'cell phone' ||
+                  name === 'phone' ||
+                  name === 'book' ||
+                  name === 'laptop' ||
+                  name === 'remote'
+                ) {
+                  const bb = det.boundingBox
+                  if (bb) {
+                    const vW = this.videoElement.videoWidth || 640
+                    const vH = this.videoElement.videoHeight || 480
+                    detectedObjectBox = {
+                      x: Math.max(0, Math.min(90, Math.round((bb.originX / vW) * 100))),
+                      y: Math.max(0, Math.min(90, Math.round((bb.originY / vH) * 100))),
+                      width: Math.max(10, Math.min(80, Math.round((bb.width / vW) * 100))),
+                      height: Math.max(10, Math.min(80, Math.round((bb.height / vH) * 100))),
+                    }
+                    detectedObjectLabel =
+                      name === 'cell phone' || name === 'phone'
+                        ? `📱 SMARTPHONE (${Math.round(cat.score * 100)}%)`
+                        : name === 'book'
+                        ? `📖 NOTES / BOOK (${Math.round(cat.score * 100)}%)`
+                        : `💻 SECOND DEVICE (${Math.round(cat.score * 100)}%)`
+                    isPhoneDetected = true
+                    break
+                  }
+                }
+              }
+              if (isPhoneDetected) break
+            }
+          }
+        } catch {}
+      }
+
+      // Edge-based fallback check if ObjectDetector hasn't fired
+      if (!isPhoneDetected) {
+        const fallbackPhone = this.checkForeignObject(rawBoxX, rawBoxY + rawBoxH, rawBoxW)
+        if (fallbackPhone) {
+          isPhoneDetected = true
+          detectedObjectLabel = '📱 SMARTPHONE / UNAUTHORIZED OBJECT'
+          detectedObjectBox = {
+            x: Math.round((rawBoxX + rawBoxW * 0.1) * 100),
+            y: Math.round((rawBoxY + rawBoxH * 0.85) * 100),
+            width: Math.round(rawBoxW * 0.8 * 100),
+            height: Math.round(rawBoxH * 0.45 * 100),
+          }
         }
+      }
+
+      if (isPhoneDetected) {
+        this.foreignObjectFrames++
+        this.currentObjectLabel = detectedObjectLabel
       } else {
         if (this.foreignObjectFrames > 0) this.foreignObjectFrames--
       }
 
-      // DECISION LOGIC with Industry Deadzones:
+      // MULTI-SIGNAL DECISION LOGIC
       let direction: GazeDirection = 'CENTER'
 
       // Priority 1: Multi-Person Intruder
       if (faceCount > 1) {
         direction = 'MULTIPLE_FACES'
       }
-      // Priority 2: Foreign Object / Phone Held Up
-      else if (this.foreignObjectFrames >= 8) {
+      // Priority 2: Smartphone or Foreign Object Detected
+      else if (this.foreignObjectFrames >= 5) {
         direction = 'FOREIGN_OBJECT'
       }
-      // Priority 3: Looking Down at Phone/Lap (Pitch >= 20°)
+      // Priority 3: Looking Down at Lap / Phone (Pitch >= 20°)
       else if (this.smoothPitch >= 20) {
         direction = 'LOOKING_DOWN'
       }
@@ -431,8 +500,9 @@ export class EyeTrackerEngine {
           height: Math.round(this.smoothFaceBox.height),
         },
         secondaryFaceBox,
-        foreignObjectDetected: isForeignObject,
-        foreignObjectBox,
+        foreignObjectDetected: isPhoneDetected,
+        foreignObjectLabel: detectedObjectLabel,
+        foreignObjectBox: detectedObjectBox,
         leftEye: {
           x: Math.round(this.smoothLeftEye.x),
           y: Math.round(this.smoothLeftEye.y),
@@ -452,7 +522,8 @@ export class EyeTrackerEngine {
         this.smoothPitch / 40,
         true,
         faceCount,
-        isForeignObject,
+        isPhoneDetected,
+        detectedObjectLabel,
         landmarks
       )
     } catch {
@@ -461,7 +532,7 @@ export class EyeTrackerEngine {
   }
 
   /**
-   * Fast edge-contrast check below chin to spot mobile phones/screens
+   * Fast edge-contrast check below chin
    */
   private checkForeignObject(faceX: number, faceBottomY: number, faceW: number): boolean {
     if (!this.ctx || !this.canvas || !this.videoElement) return false
@@ -497,9 +568,6 @@ export class EyeTrackerEngine {
     }
   }
 
-  /**
-   * Lightweight Fallback Computer Vision while MediaPipe loads
-   */
   private processFallbackCV() {
     if (!this.videoElement) return
     const landmarks: TrackedLandmarks = {
@@ -513,7 +581,7 @@ export class EyeTrackerEngine {
       yaw: 0,
       roll: 0,
     }
-    this.handleGazeOutput('CENTER', 0, 0, true, 1, false, landmarks)
+    this.handleGazeOutput('CENTER', 0, 0, true, 1, false, '', landmarks)
   }
 
   private handleGazeOutput(
@@ -523,6 +591,7 @@ export class EyeTrackerEngine {
     faceDetected: boolean,
     faceCount: number,
     foreignObjectDetected: boolean,
+    foreignObjectLabel: string,
     landmarks: TrackedLandmarks
   ) {
     const now = Date.now()
@@ -536,12 +605,13 @@ export class EyeTrackerEngine {
 
       this.onGazeUpdate?.({
         direction,
-        confidence: Math.min(99, Math.round(85 + Math.abs(hOffset + vOffset) * 12)),
+        confidence: Math.min(99, Math.round(88 + Math.abs(hOffset + vOffset) * 10)),
         horizontalOffset: Math.round(hOffset * 100) / 100,
         verticalOffset: Math.round(vOffset * 100) / 100,
         faceDetected,
         faceCount,
         foreignObjectDetected,
+        foreignObjectLabel,
         warningCount: this.warningCount,
         isSustainedDeviation: isSustained,
         deviationProgress: progress,
@@ -560,7 +630,7 @@ export class EyeTrackerEngine {
           if (direction === 'MULTIPLE_FACES') {
             friendlyReason = 'Multiple People Detected in Camera Frame'
           } else if (direction === 'FOREIGN_OBJECT') {
-            friendlyReason = 'Foreign Object / Phone Detected'
+            friendlyReason = foreignObjectLabel || 'Foreign Object / Smartphone Detected'
           }
           const reason = `Session Terminated: Candidate reached 4 proctoring infractions (${friendlyReason}).`
           this.onTerminated?.(reason)
@@ -580,6 +650,7 @@ export class EyeTrackerEngine {
         faceDetected: true,
         faceCount,
         foreignObjectDetected,
+        foreignObjectLabel: '',
         warningCount: this.warningCount,
         isSustainedDeviation: false,
         deviationProgress: progress,
