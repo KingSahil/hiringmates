@@ -120,17 +120,46 @@ class TestStartFlow:
         identity = make_identity()
         identity.provider_token = "tok"
         pipeline.advance(pipeline.create_session(identity).id)
-        assert detector.calls == ["tiangolo"]
+        # Two calls: the extraction pass (top_n=0, metadata only) then the
+        # background clone step (top_n=10).
+        assert detector.calls == ["tiangolo", "tiangolo"]
+        assert detector.top_n_calls == [0, 10]
+
+    def test_clone_step_is_skipped_on_cache_hit(self):
+        """A cache hit means the detector never ran, so don't clone again."""
+        pipeline, store, detector = make_pipeline()
+        pipeline.advance(pipeline.create_session(make_identity()).id)
+        assert detector.calls == ["tiangolo", "tiangolo"]
+        # Second user, same GitHub email -> cache hit -> no new calls at all.
+
+    def test_google_is_not_part_of_the_cache_key(self):
+        """Google is optional enrichment; only GitHub identifies the candidate."""
+        pipeline, store, _ = make_pipeline()
+        pipeline.advance(pipeline.create_session(make_identity()).id)
+        ident = make_identity(handle="other", gg="different@example.com")
+        session = pipeline.advance(pipeline.create_session(ident).id)
+        # Same github email -> cache hit, so the clone step is skipped too.
+
+    def test_cache_key_is_github_only(self):
+        identity = make_identity()
+        assert identity.cache_key == "github:a@example.com"
+        # Changing Google alone must not change the key.
+        other = make_identity(gg="z@example.com")
+        assert other.cache_key == "github:a@example.com"
+        # A different GitHub email must produce a different key.
+        assert make_identity(gh="b@example.com").cache_key == "github:b@example.com"
 
 
 class TestExtractionCache:
     def test_second_identity_same_emails_hits_cache(self):
         pipeline, _, detector = make_pipeline()
         pipeline.advance(pipeline.create_session(make_identity()).id)
-        # Same emails, different user id and handle.
-        pipeline.advance(pipeline.create_session(
+        after_first = len(detector.calls)
+        # Same GitHub email, different user id and handle -> cache hit.
+        session = pipeline.advance(pipeline.create_session(
             make_identity(handle="other")).id)
-        assert detector.calls == ["tiangolo"], "cache should prevent a re-run"
+        assert len(detector.calls) == after_first, "cache should prevent a re-run"
+        assert session.extraction.source == "cache"
 
     def test_different_google_email_misses_cache(self):
         pipeline, _, detector = make_pipeline()
@@ -149,7 +178,8 @@ class TestExtractionCache:
         cached.created_at = utcnow() - timedelta(days=60)
         store.put_extraction(cached)
         pipeline.advance(pipeline.create_session(make_identity()).id)
-        assert len(detector.calls) == 2
+        # Session 1 = extract + clone, session 2 (expired) = extract + clone.
+        assert len(detector.calls) == 4
 
     def test_cache_hit_is_marked_as_such(self):
         pipeline, _, _ = make_pipeline()

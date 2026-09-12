@@ -36,20 +36,26 @@ class Identity(BaseModel):
     """
     Who the candidate is, as asserted by the auth layer.
 
-    Both emails are required here because the extraction cache is keyed on the
-    pair: a returning user is only recognised when *both* match.
+    GitHub is the primary and only required provider. Google is optional: it may
+    be linked later as a secondary account, so it must never be required here.
     """
 
     user_id: str
     github_email: str
-    google_email: str
+    google_email: str = ""
     github_handle: str
     provider_token: str | None = None
 
     @property
     def cache_key(self) -> str:
-        """Stable cache key. Emails are lowercased; ordering is fixed."""
-        return f"{self.github_email.strip().lower()}|{self.google_email.strip().lower()}"
+        """
+        Keyed on the GitHub identity only.
+
+        Deliberately NOT a (github, google) pair any more: if Google were part of
+        the key, linking it later would change the key and silently forfeit the
+        cache — exactly the opposite of the intent.
+        """
+        return f"github:{self.github_email.strip().lower()}"
 
 
 class Extraction(BaseModel):
@@ -199,7 +205,14 @@ class EnhancedProfile(BaseModel):
     identity: Identity
     rough: RoughProfile
     grade: Grade
+    # Display only. Theory questions are unlimited, so this is NOT a grading
+    # signal and must never be fed to the model as one.
     theory_elapsed_seconds: float | None = None
+    # MCQs ARE timed (per-question limit), so these are meaningful.
+    mcq_elapsed_seconds: float | None = None
+    mcq_seconds_allowed: float | None = None
+    mcq_over_limit: bool = False
+    cloned: list[dict[str, Any]] = Field(default_factory=list)
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
     skills: list[SkillTag] = Field(default_factory=list)
@@ -217,6 +230,8 @@ class Session(BaseModel):
     question_set: QuestionSet | None = None
     served_at: datetime | None = None
     answers: list[Answer] = Field(default_factory=list)
+    # Populated by the background clone step after questions are served.
+    cloned: list[dict[str, Any]] = Field(default_factory=list)
     enhanced: EnhancedProfile | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=utcnow)

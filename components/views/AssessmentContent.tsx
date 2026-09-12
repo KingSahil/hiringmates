@@ -28,7 +28,12 @@ interface SkillTag {
 
 interface Enhanced {
   summary: string
+  // Display only — theory questions are unlimited, so this carries no signal.
   theory_elapsed_seconds: number | null
+  mcq_elapsed_seconds: number | null
+  mcq_seconds_allowed: number | null
+  mcq_over_limit: boolean
+  cloned: { name: string; path: string; loc: number }[]
   tags: string[]
   skills: SkillTag[]
   grade: {
@@ -53,11 +58,16 @@ interface SessionView {
 }
 
 const POLL_MS = 2000
+// Seconds allowed per multiple-choice question. Theory questions are unlimited.
+const MCQ_SECONDS = 120
 
 export function AssessmentContent() {
   const [signedIn, setSignedIn] = useState<boolean | null>(null)
   const [saved, setSaved] = useState<Enhanced | null>(null)
   const [session, setSession] = useState<SessionView | null>(null)
+  // Per-question countdown for MCQs only. Theory questions are unlimited.
+  const [timeLeft, setTimeLeft] = useState<Record<string, number>>({})
+  const [expired, setExpired] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [answers, setAnswers] = useState<Record<string, { index?: number; text?: string }>>({})
@@ -102,6 +112,32 @@ export function AssessmentContent() {
   }, [])
 
   useEffect(() => stopPolling, [stopPolling])
+
+  // Start the clock when questions arrive: MCQs get MCQ_SECONDS each.
+  useEffect(() => {
+    if (!session?.questions.length) return
+    const mcqs = session.questions.filter((q) => q.kind === 'mcq')
+    setTimeLeft(Object.fromEntries(mcqs.map((q) => [q.id, MCQ_SECONDS])))
+    setExpired({})
+  }, [session?.id, session?.status])
+
+  // Tick down; lock a question when its time runs out.
+  useEffect(() => {
+    const ids = Object.keys(timeLeft)
+    if (!ids.length) return
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        const next = { ...prev }
+        for (const id of ids) {
+          if (expired[id]) continue
+          next[id] = Math.max(0, (prev[id] ?? 0) - 1)
+          if (next[id] === 0) setExpired((e) => ({ ...e, [id]: true }))
+        }
+        return next
+      })
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [Object.keys(timeLeft).join(','), expired])
 
   const poll = useCallback((id: string) => {
     stopPolling()
@@ -283,10 +319,25 @@ export function AssessmentContent() {
                 </p>
                 {q.kind === 'mcq' ? (
                   <div className="mt-2 grid gap-2">
+                    <p
+                      className={`text-[11px] font-black uppercase ${
+                        (timeLeft[q.id] ?? MCQ_SECONDS) <= 15
+                          ? 'text-rose-600 dark:text-rose-400'
+                          : 'text-[#171717]/50 dark:text-[#f4f4f7]/50'
+                      }`}
+                    >
+                      {expired[q.id]
+                        ? 'Time up'
+                        : `${timeLeft[q.id] ?? MCQ_SECONDS}s left`}
+                    </p>
                     {q.options.map((opt, oi) => (
                       <label
                         key={oi}
-                        className={`flex cursor-pointer items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm transition ${
+                        className={`flex items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm transition ${
+                          expired[q.id]
+                            ? 'cursor-not-allowed opacity-50'
+                            : 'cursor-pointer'
+                        } ${
                           answers[q.id]?.index === oi
                             ? 'border-[#6d73ff] bg-[#6d73ff]/10'
                             : 'border-[#171717]/20 hover:border-[#6d73ff] dark:border-[#2e323b]'
@@ -295,6 +346,7 @@ export function AssessmentContent() {
                         <input
                           type="radio"
                           name={q.id}
+                          disabled={expired[q.id]}
                           checked={answers[q.id]?.index === oi}
                           onChange={() =>
                             setAnswers((a) => ({ ...a, [q.id]: { index: oi } }))
@@ -388,12 +440,32 @@ export function AssessmentContent() {
               </dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-[#171717]/60 dark:text-[#f4f4f7]/60">Theory time</dt>
+              <dt className="text-[#171717]/60 dark:text-[#f4f4f7]/60">
+                MCQ time (2 min each)
+              </dt>
               <dd className="flex items-center gap-1 font-black text-[#171717] dark:text-[#f4f4f7]">
                 <Clock className="h-3 w-3" />
-                {session.enhanced.theory_elapsed_seconds ?? '—'}s
+                {session.enhanced.mcq_elapsed_seconds ?? '—'}s
+                {session.enhanced.mcq_seconds_allowed
+                  ? ` / ${session.enhanced.mcq_seconds_allowed}s`
+                  : ''}
+                {session.enhanced.mcq_over_limit && (
+                  <span className="ml-1 rounded bg-rose-500 px-1 text-[9px] uppercase text-white">
+                    over
+                  </span>
+                )}
               </dd>
             </div>
+            {session.enhanced.cloned.length > 0 && (
+              <div className="flex justify-between">
+                <dt className="text-[#171717]/60 dark:text-[#f4f4f7]/60">
+                  Cloned for exact LOC
+                </dt>
+                <dd className="font-black text-[#171717] dark:text-[#f4f4f7]">
+                  {session.enhanced.cloned.length} repos
+                </dd>
+              </div>
+            )}
             <div className="flex justify-between">
               <dt className="text-[#171717]/60 dark:text-[#f4f4f7]/60">Overall</dt>
               <dd className="font-black text-[#171717] dark:text-[#f4f4f7]">

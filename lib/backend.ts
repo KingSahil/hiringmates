@@ -26,9 +26,10 @@ export interface BackendIdentity {
 /**
  * Map a Supabase user onto the backend's `Identity`.
  *
- * Both emails are required, because the extraction cache is keyed on the pair.
- * A user who has only linked GitHub will produce a partial key and the cache
- * will never hit — so we report that rather than silently starting a session.
+ * GitHub is the primary provider and the only requirement. Google is OPTIONAL:
+ * it may be linked later as a secondary account. It is deliberately excluded
+ * from the cache key, so linking it later must not invalidate an existing
+ * cached extraction.
  */
 export function buildIdentity(
   user: any,
@@ -63,8 +64,8 @@ export function buildIdentity(
   const missing: string[] = []
   if (!identity.user_id) missing.push('user id')
   if (!identity.github_email) missing.push('GitHub account (email)')
-  if (!identity.google_email) missing.push('Google account (email)')
   if (!identity.github_handle) missing.push('GitHub handle')
+  // Google is intentionally absent here — it is optional enrichment only.
 
   return { identity, missing }
 }

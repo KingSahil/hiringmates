@@ -42,6 +42,9 @@ class Scenario:
     rubric: tuple[str, ...]
     mcq_count: int = 3
     theory_count: int = 1
+    # Seconds allowed per multiple-choice question. Theory questions are
+    # unlimited and must not be timed.
+    mcq_seconds_per_question: int = 120
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -124,9 +127,11 @@ CANDIDATE_ONBOARDING = Scenario(
         "answer should score 3 or 4. Reserve 0 for an answer that is empty, "
         "off-topic or factually wrong; reserve 5 for one that is precise and "
         "complete. Partial credit is expected, not exceptional.\n\n"
-        "Note the supplied elapsed time for the theory question. Interpret it "
-        "as a weak signal only: fast can mean fluent, slow can mean careful. "
-        "Never let it outweigh correctness."
+        "Timing: multiple-choice questions are timed and theory questions are "
+        "NOT. Any elapsed time given for the theory answer is display-only and "
+        "carries no signal - do not reward or penalise it. If the MCQ time "
+        "limit was exceeded, note it once in the verdict at most, but never let "
+        "it drive the score."
     ),
     rubric=(
         "Technical accuracy",

@@ -51,7 +51,8 @@ class DetectorError(RuntimeError):
 
 class Detector(ABC):
     @abstractmethod
-    def extract(self, handle: str, token: str | None = None) -> dict[str, Any]:
+    def extract(self, handle: str, token: str | None = None,
+                top_n: int = 0) -> dict[str, Any]:
         """Return the raw GitHub detector report for *handle*."""
 
 
@@ -70,7 +71,8 @@ class SubprocessDetector(Detector):
         self._python = python or sys.executable
         self._timeout = timeout
 
-    def extract(self, handle: str, token: str | None = None) -> dict[str, Any]:
+    def extract(self, handle: str, token: str | None = None,
+                top_n: int = 0) -> dict[str, Any]:
         import os
 
         env = dict(os.environ)
@@ -78,7 +80,7 @@ class SubprocessDetector(Detector):
             env["GITHUB_TOKEN"] = token
         try:
             proc = subprocess.run(
-                [self._python, self._script, handle],
+                [self._python, self._script, handle, "--top-n", str(top_n)],
                 capture_output=True, text=True, encoding="utf-8",
                 timeout=self._timeout, env=env,
             )
@@ -99,19 +101,25 @@ class FakeDetector(Detector):
         self.payload = payload or {"handle": "fake", "tags": {"all": []},
                                    "repositories": []}
         self.calls: list[str] = []
+        self.top_n_calls: list[int] = []
 
-    def extract(self, handle: str, token: str | None = None) -> dict[str, Any]:
+    def extract(self, handle: str, token: str | None = None,
+                top_n: int = 0) -> dict[str, Any]:
         self.calls.append(handle)
+        self.top_n_calls.append(top_n)
         return self.payload
 
 
 class Pipeline:
     def __init__(self, llm: LLMClient, store: Store, detector: Detector,
-                 ttl_days: int = 30) -> None:
+                 ttl_days: int = 30, clone_top_n: int = 10) -> None:
         self.llm = llm
         self.store = store
         self.detector = detector
         self.ttl_days = ttl_days
+        # Repositories shallow-cloned for exact LOC, as a background step after
+        # the rough profile so profiling is never gated on clone time.
+        self.clone_top_n = clone_top_n
 
     # ---------------------------------------------------------------- start
     def create_session(self, identity: Identity,
@@ -130,11 +138,59 @@ class Pipeline:
             self._extract(session)
             self._profile(session)
             self._serve_questions(session)
+            # Persist now so the client sees the questions immediately...
+            self.store.put_session(session)
+            # ...then clone, which takes minutes. Deliberately after the
+            # questions are visible, not before.
+            self._clone(session)
         elif session.status == "awaiting" or session.status == "complete":
             return session  # nothing to do until answers arrive
 
         self.store.put_session(session)
         return session
+
+    def _clone(self, session: Session) -> None:
+        """
+        Shallow-clone the top N repositories for exact line counts.
+
+        Runs after the questions are already served, so a slow clone never
+        delays the candidate. Failures are logged, not fatal: the tree-based
+        estimate is still a valid fallback.
+        """
+        if self.clone_top_n <= 0 or session.status == "failed":
+            return
+        # A cache hit means the detector never ran, so there is nothing new to
+        # clone — the previous run already did it for this identity.
+        if session.extraction is not None and session.extraction.source == "cache":
+            logger.info("cache hit: skipping clone for %s", session.id)
+            return
+        try:
+            payload = self.detector.extract(
+                session.identity.github_handle,
+                token=session.identity.provider_token,
+                top_n=self.clone_top_n,
+            )
+        except Exception as e:
+            logger.warning("clone step failed for %s: %s", session.id, e)
+            return
+        session.cloned = payload.get("cloned") or []
+        logger.info("cloned %d repos for %s", len(session.cloned), session.id)
+
+    def _mcq_timing(self, session: Session) -> tuple[float | None, float | None, bool]:
+        """
+        MCQs are timed per question; theory is unlimited and never timed.
+
+        Returns (elapsed_seconds, allowed_seconds, over_limit).
+        """
+        if session.served_at is None or session.question_set is None:
+            return None, None, False
+        count = len(session.question_set.mcqs)
+        if count == 0:
+            return None, None, False
+        scenario = get_scenario(session.scenario)
+        allowed = float(scenario.mcq_seconds_per_question * count)
+        elapsed = round((utcnow() - session.served_at).total_seconds(), 2)
+        return elapsed, allowed, elapsed > allowed
 
     def _extract(self, session: Session) -> None:
         session.status = "extracting"
@@ -221,6 +277,7 @@ class Pipeline:
         scenario = get_scenario(session.scenario)
 
         elapsed = self._theory_elapsed(session)
+        mcq_elapsed, mcq_allowed, mcq_over = self._mcq_timing(session)
         grade = self._grade_mcqs(session)
         try:
             grade = self._grade_theory(session, scenario, grade, elapsed)
@@ -236,6 +293,10 @@ class Pipeline:
             rough=session.rough_profile or RoughProfile(summary="", headline=""),
             grade=grade,
             theory_elapsed_seconds=elapsed,
+            mcq_elapsed_seconds=mcq_elapsed,
+            mcq_seconds_allowed=mcq_allowed,
+            mcq_over_limit=mcq_over,
+            cloned=list(session.cloned),
             summary=grade.verdict,
             tags=self._tags(session),
             skills=self._skills(session),
