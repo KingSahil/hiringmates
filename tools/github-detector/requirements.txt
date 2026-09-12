@@ -1,0 +1,7 @@
+# Runtime — this is the entire dependency set of the detector.
+mcp>=2.2.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Tests
+pytest>=7.4.0

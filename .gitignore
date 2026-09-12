@@ -7,9 +7,22 @@ __v0_jsx-dev-runtime.ts
 .vercel/
 
 # Environment variables
+# NOTE: `.env*.local` does NOT match a plain `.env`, so `.env` is listed
+# explicitly — otherwise a GitHub token would be committed and pushed.
+.env
 .env*.local
 
 # Common ignores
 node_modules
 .next/
 .DS_Store
+
+# --- tools/github-detector (Python) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.pytest_tmp/
+# Clone cache for the repository analysis pass
+tools/github-detector/data/
