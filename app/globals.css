@@ -198,3 +198,108 @@
 .landing-footer { border-top: 3px solid #4d3b2b; margin-top: 1rem; padding-top: 1rem; color: #685744; font-size: .65rem; letter-spacing: .16em; }
 @media (max-width: 700px) { .landing-shell { padding: 1rem; } .landing-choices { grid-template-columns: 1fr; } .choice-panel { min-height: 270px; } }
 
+/* Retro arcade system: shared across every workspace view. */
+:root {
+  --retro-paper: #f6edcf;
+  --retro-ink: #151515;
+  --retro-red: #d9362b;
+  --retro-yellow: #f2b84b;
+  --retro-white: #fffaf0;
+  --retro-line: #5b4635;
+}
+
+body {
+  background: var(--retro-ink);
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+main.min-h-screen {
+  background: var(--retro-ink) !important;
+  color: var(--retro-white) !important;
+}
+
+main.min-h-screen > .mx-auto {
+  min-height: calc(100vh - 4.5rem);
+  padding: 2.5rem clamp(1rem, 4vw, 4rem);
+}
+
+main.min-h-screen > header {
+  background: var(--retro-paper) !important;
+  border-color: var(--retro-line) !important;
+  box-shadow: 0 4px 0 var(--retro-red);
+}
+
+main.min-h-screen > header button {
+  border-radius: 0;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
+
+main.min-h-screen > header button:hover {
+  background: var(--retro-yellow);
+}
+
+main.min-h-screen .rounded-2xl,
+main.min-h-screen .rounded-xl,
+main.min-h-screen .rounded-lg,
+main.min-h-screen .rounded-full,
+main.min-h-screen .rounded-md {
+  border-radius: 0 !important;
+}
+
+main.min-h-screen .bg-cyan-300,
+main.min-h-screen .bg-fuchsia-400 {
+  background: var(--retro-red) !important;
+  color: var(--retro-white) !important;
+}
+
+main.min-h-screen .text-cyan-300,
+main.min-h-screen .text-cyan-200,
+main.min-h-screen .text-fuchsia-300,
+main.min-h-screen .text-fuchsia-200 {
+  color: var(--retro-yellow) !important;
+}
+
+main.min-h-screen .border-cyan-300\/25,
+main.min-h-screen .border-fuchsia-300\/25 {
+  border-color: var(--retro-line) !important;
+}
+
+main.min-h-screen article,
+main.min-h-screen aside,
+main.min-h-screen section > div[class*="bg-"],
+main.min-h-screen section > div[class*="border"] {
+  box-shadow: 4px 4px 0 rgba(217, 54, 43, .48);
+}
+
+main.min-h-screen button:not(.choice-panel) {
+  border-radius: 0 !important;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+main.min-h-screen button:not(.choice-panel):hover {
+  box-shadow: 4px 4px 0 var(--retro-yellow);
+  transform: translate(-2px, -2px);
+}
+
+main.min-h-screen input,
+main.min-h-screen textarea {
+  border-radius: 0 !important;
+  background: #202020 !important;
+  border-color: var(--retro-line) !important;
+  color: var(--retro-white) !important;
+}
+
+main.min-h-screen h1,
+main.min-h-screen h2,
+main.min-h-screen h3 {
+  text-transform: uppercase;
+  text-shadow: 2px 2px 0 rgba(217, 54, 43, .4);
+}
+
+@media (max-width: 700px) {
+  main.min-h-screen > .mx-auto { padding: 1.5rem 1rem; }
+}
+
