@@ -664,6 +664,145 @@ class TestLocNoteConsistency:
         assert high == int(1000 / LOC_ERROR_RATIO_LOW)
 
 
+class TestTagExtraction:
+    """Tags are derived from already-fetched data; no extra API calls."""
+
+    @staticmethod
+    def _repo(name: str, langs: dict, topics=(), **structure) -> RepoRecord:
+        r = RepoRecord(name=name, full_name=f"u/{name}", stars=50, loc=5000,
+                       languages=dict(langs))
+        r.topics = list(topics)
+        r.structure = dict(structure)
+        return r
+
+    def test_languages_ranked_by_bytes_with_share(self):
+        from app.github import extract_languages
+        repos = [self._repo("a", {"Python": 9000, "Shell": 1000})]
+        langs = extract_languages(repos)
+        assert [l["name"] for l in langs] == ["Python", "Shell"]
+        assert langs[0]["share"] == 0.9
+        assert langs[0]["repos"] == 1
+
+    def test_language_repo_count_aggregates(self):
+        from app.github import extract_languages
+        repos = [self._repo("a", {"Python": 100}),
+                 self._repo("b", {"Python": 100, "Go": 50})]
+        by_name = {l["name"]: l for l in extract_languages(repos)}
+        assert by_name["Python"]["repos"] == 2
+        assert by_name["Go"]["repos"] == 1
+
+    def test_low_share_language_stays_in_detail_but_not_tags(self):
+        """Nothing is hidden; only noise is kept out of the flat tag list."""
+        from app.github import build_tags
+        repos = [self._repo("a", {"Python": 100_000, "Jinja": 50})]
+        tags = build_tags(repos)
+        assert "Python" in tags["all"]
+        assert "Jinja" not in tags["all"]
+        assert "Jinja" in [l["name"] for l in tags["languages"]]
+
+    def test_skill_fires_on_structure_flag_ratio(self):
+        from app.github import infer_skills
+        repos = [self._repo("a", {"Python": 100}, has_ci=True),
+                 self._repo("b", {"Python": 100}, has_ci=True),
+                 self._repo("c", {"Python": 100}, has_ci=False)]
+        names = [s["name"] for s in infer_skills(repos)]
+        assert "ci-cd" in names
+
+    def test_skill_fires_on_repeated_topic(self):
+        from app.github import infer_skills
+        repos = [self._repo("a", {"Python": 100}, topics=["docker"]),
+                 self._repo("b", {"Python": 100}, topics=["docker"])]
+        assert "containerisation" in [s["name"] for s in infer_skills(repos)]
+
+    def test_single_topic_mention_does_not_fire(self):
+        """Precision over recall: one mention is weak evidence."""
+        from app.github import infer_skills
+        repos = [self._repo("a", {"Python": 100}, topics=["docker"]),
+                 self._repo("b", {"Python": 100})]
+        assert "containerisation" not in [s["name"] for s in infer_skills(repos)]
+
+    def test_confidence_high_when_signals_agree(self):
+        from app.github import infer_skills
+        repos = [self._repo("a", {"Python": 100}, topics=["docker"],
+                            has_dockerfile=True),
+                 self._repo("b", {"Python": 100}, topics=["docker"],
+                            has_dockerfile=True)]
+        skill = next(s for s in infer_skills(repos) if s["name"] == "containerisation")
+        assert skill["confidence"] == "high"
+        assert len(skill["evidence"]) >= 2
+
+    def test_confidence_medium_on_single_signal(self):
+        from app.github import infer_skills
+        repos = [self._repo("a", {"Python": 100}, topics=["async"]),
+                 self._repo("b", {"Python": 100}, topics=["async"])]
+        skill = next(s for s in infer_skills(repos) if s["name"] == "async-programming")
+        assert skill["confidence"] == "medium"
+
+    def test_every_skill_carries_evidence(self):
+        from app.github import infer_skills
+        repos = [self._repo("a", {"Python": 100}, topics=["docker"], has_ci=True,
+                            has_tests=True)]
+        for skill in infer_skills(repos):
+            assert skill["evidence"], f"{skill['name']} fired with no evidence"
+
+    def test_flat_tag_list_combines_languages_and_skills(self):
+        from app.github import build_tags
+        repos = [self._repo("a", {"Python": 100}, topics=["docker"], has_ci=True),
+                 self._repo("b", {"Python": 100}, topics=["docker"])]
+        tags = build_tags(repos)
+        assert "Python" in tags["all"]
+        assert "containerisation" in tags["all"]
+
+    def test_repeated_topic_on_one_repo_counts_once(self):
+        """A topic listed twice on a single repo is still one repo's worth."""
+        from app.github import infer_skills
+        repos = [self._repo("a", {"Python": 100}, topics=["docker", "docker"])]
+        assert "containerisation" not in [s["name"] for s in infer_skills(repos)]
+
+    def test_no_repos_yields_empty_tags(self):
+        from app.github import build_tags
+        tags = build_tags([])
+        assert tags["all"] == []
+        assert tags["languages"] == []
+        assert tags["skills"] == []
+
+
+class TestProfilePersistence:
+    def test_off_by_default(self, tmp_path, monkeypatch):
+        from app import github as gh
+
+        monkeypatch.setattr(gh.GitHubClient, "rate_limit",
+                            lambda self: {"core": {}, "graphql": {}})
+        monkeypatch.setattr(gh.GitHubClient, "fetch_profile",
+                            lambda self, login: {"login": login})
+        monkeypatch.setattr(gh.GitHubClient, "fetch_repos",
+                            lambda self, login, max_repos=300: [])
+        cfg = gh.DetectorConfig(top_n_clone=0, profile_dir=str(tmp_path / "profiles"))
+        report = gh.detect_github("someone", config=cfg)
+        assert "profile_saved_to" not in report["meta"]
+        assert not (tmp_path / "profiles").exists()
+
+    def test_saves_when_enabled(self, tmp_path, monkeypatch):
+        import json
+        from app import github as gh
+
+        monkeypatch.setattr(gh.GitHubClient, "rate_limit",
+                            lambda self: {"core": {}, "graphql": {}})
+        monkeypatch.setattr(gh.GitHubClient, "fetch_profile",
+                            lambda self, login: {"login": login})
+        monkeypatch.setattr(gh.GitHubClient, "fetch_repos",
+                            lambda self, login, max_repos=300: [])
+        cfg = gh.DetectorConfig(top_n_clone=0, save_profile=True,
+                                profile_dir=str(tmp_path / "profiles"))
+        report = gh.detect_github("someone", config=cfg)
+        written = tmp_path / "profiles" / "someone.json"
+        assert written.exists()
+        saved = json.loads(written.read_text(encoding="utf-8"))
+        assert saved["handle"] == "someone"
+        assert "tags" in saved
+        assert report["meta"]["profile_saved_to"].endswith("someone.json")
+
+
 class TestHandleNormalisation:
     """Agents pass URLs and @handles as often as bare logins."""
 

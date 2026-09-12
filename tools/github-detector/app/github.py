@@ -1111,6 +1111,218 @@ def resolve_uncertain_repos(repos: list[RepoRecord]) -> list[RepoRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Tag extraction
+#
+# Everything here is DERIVED from data the detector already fetched: per-repo
+# language byte totals, repository topics, and the structural fingerprint. It
+# costs no additional API calls.
+#
+# This is deliberately NOT semantic code analysis. Inferring what a codebase
+# actually does, which libraries it reaches for, or how good it is requires
+# reading the code (RAG). These are the signals available without that.
+# ---------------------------------------------------------------------------
+
+# A language must reach this share of total bytes to become a *tag*. Languages
+# below it still appear in `tags.languages` with their real share, so nothing is
+# hidden — they just do not pollute the flat tag list.
+LANGUAGE_TAG_MIN_SHARE = 0.01
+
+# Skill rules. Each fires on evidence already present in the response:
+#   flags     - a structure boolean, with the minimum ratio of ranked repos
+#   topics    - a topic name, with the minimum number of repos carrying it
+#   languages - a language, with the minimum byte share
+# A rule fires if ANY condition matches; matching more than one raises
+# confidence, because independent signals agreeing is stronger evidence.
+#
+# Topic thresholds are 2 rather than 1 on purpose: a single mention is weak
+# evidence, and precision matters more than recall for a candidate tag.
+SKILL_RULES: tuple[dict[str, Any], ...] = (
+    {
+        "name": "containerisation",
+        "flags": {"has_dockerfile": 0.20},
+        "topics": {"docker": 2, "dockerfile": 2, "docker-image": 2,
+                   "docker-compose": 2, "containers": 2},
+    },
+    {
+        "name": "ci-cd",
+        "flags": {"has_ci": 0.50},
+        "topics": {"ci": 2, "continuous-integration": 2, "github-actions": 2,
+                   "cicd": 2, "ci-cd": 2},
+    },
+    {
+        "name": "testing",
+        "flags": {"has_tests": 0.50},
+        "topics": {"testing": 2, "pytest": 2, "unit-testing": 2, "tdd": 2},
+    },
+    {
+        "name": "open-source-hygiene",
+        "flags": {"has_license": 0.50},
+    },
+    {
+        "name": "documentation",
+        "flags": {"has_readme": 0.80},
+    },
+    {
+        "name": "frontend",
+        "topics": {"react": 2, "nextjs": 2, "vue": 2, "frontend": 2,
+                   "tailwindcss": 2, "svelte": 2},
+        "languages": {"JavaScript": 0.10, "TypeScript": 0.10,
+                      "HTML": 0.05, "CSS": 0.05},
+    },
+    {
+        "name": "backend",
+        "topics": {"backend": 2, "fastapi": 2, "flask": 2, "django": 2,
+                   "express": 2, "server": 2},
+        "languages": {"Python": 0.30, "Go": 0.30, "Java": 0.30,
+                      "Ruby": 0.30, "PHP": 0.30, "C#": 0.30},
+    },
+    {
+        "name": "api-development",
+        "topics": {"api": 2, "rest": 2, "rest-api": 2, "graphql": 2,
+                   "openapi": 2, "grpc": 2},
+    },
+    {
+        "name": "async-programming",
+        "topics": {"async": 2, "asyncio": 2, "concurrency": 2,
+                   "asynchronous": 2},
+    },
+    {
+        "name": "web-services",
+        "topics": {"nginx": 2, "uvicorn": 2, "gunicorn": 2, "asgi": 2,
+                   "wsgi": 2, "web-server": 2},
+    },
+    {
+        "name": "devops",
+        "topics": {"devops": 2, "infrastructure": 2, "terraform": 2,
+                   "kubernetes": 2, "ansible": 2, "helm": 2},
+    },
+    {
+        "name": "machine-learning",
+        "topics": {"machine-learning": 2, "deep-learning": 2, "pytorch": 2,
+                   "tensorflow": 2, "scikit-learn": 2, "llm": 2, "nlp": 2},
+    },
+    {
+        "name": "data-engineering",
+        "topics": {"data-science": 2, "data-engineering": 2, "etl": 2,
+                   "data-pipeline": 2, "sql": 2, "analytics": 2},
+    },
+    {
+        "name": "cli-tooling",
+        "topics": {"cli": 2, "command-line": 2, "terminal": 2, "shell": 2},
+    },
+    {
+        "name": "github-automation",
+        "topics": {"github-app": 2, "github-api": 2, "bot": 2,
+                   "automation": 2},
+    },
+)
+
+TAG_NOTE = (
+    "Tags are derived only from data already fetched — language byte totals, "
+    "repository topics, and the structural fingerprint — so they cost no extra "
+    "API calls. They are NOT semantic code analysis: determining what a "
+    "codebase actually does, which libraries it uses, or how well it is "
+    "written requires reading the code. Treat skill tags as evidence-backed "
+    "signals, not verdicts, and prefer the ones with confidence 'high'."
+)
+
+
+def extract_languages(repos: list[RepoRecord]) -> list[dict[str, Any]]:
+    """
+    Rank languages by total bytes across the given repositories.
+
+    Returns every language seen, with its share of the codebase and the number
+    of repositories it appears in. Nothing is filtered — callers decide what
+    matters, and ``tags.all`` already applies the noise floor.
+    """
+    totals: dict[str, int] = {}
+    repo_counts: dict[str, int] = {}
+    for r in repos:
+        for lang, size in r.languages.items():
+            totals[lang] = totals.get(lang, 0) + size
+            repo_counts[lang] = repo_counts.get(lang, 0) + 1
+
+    grand_total = sum(totals.values()) or 1
+    return [
+        {
+            "name": lang,
+            "bytes": size,
+            "share": round(size / grand_total, 4),
+            "repos": repo_counts[lang],
+        }
+        for lang, size in sorted(totals.items(), key=lambda kv: -kv[1])
+    ]
+
+
+def infer_skills(repos: list[RepoRecord]) -> list[dict[str, Any]]:
+    """
+    Infer skill tags from repository topics and the structural fingerprint.
+
+    Each result carries the evidence that triggered it, so a caller can judge
+    the tag rather than take it on trust. Confidence is 'high' when two or more
+    independent signals agree, otherwise 'medium'.
+    """
+    total = len(repos) or 1
+
+    topic_repos: dict[str, int] = {}
+    for r in repos:
+        for topic in {t.lower() for t in r.topics}:
+            topic_repos[topic] = topic_repos.get(topic, 0) + 1
+
+    flag_ratio: dict[str, float] = {}
+    for flag in ("has_tests", "has_ci", "has_dockerfile", "has_license", "has_readme"):
+        hits = sum(1 for r in repos if r.structure.get(flag))
+        flag_ratio[flag] = hits / total
+
+    lang_share = {lang["name"]: lang["share"] for lang in extract_languages(repos)}
+
+    skills: list[dict[str, Any]] = []
+    for rule in SKILL_RULES:
+        evidence: list[str] = []
+
+        for flag, minimum in rule.get("flags", {}).items():
+            ratio = flag_ratio.get(flag, 0.0)
+            if ratio >= minimum:
+                evidence.append(f"{flag} in {round(ratio * 100)}% of ranked repos")
+
+        for topic, minimum in rule.get("topics", {}).items():
+            count = topic_repos.get(topic, 0)
+            if count >= minimum:
+                evidence.append(f"topic '{topic}' on {count} repos")
+
+        for lang, minimum in rule.get("languages", {}).items():
+            share = lang_share.get(lang, 0.0)
+            if share >= minimum:
+                evidence.append(f"{lang} at {round(share * 100)}% of code")
+
+        if evidence:
+            skills.append({
+                "name": rule["name"],
+                "confidence": "high" if len(evidence) > 1 else "medium",
+                "evidence": evidence,
+            })
+
+    skills.sort(key=lambda s: (s["confidence"] != "high", s["name"]))
+    return skills
+
+
+def build_tags(repos: list[RepoRecord]) -> dict[str, Any]:
+    """
+    Build the tag block: a flat list ready to attach to a record, plus the
+    structured detail behind it.
+    """
+    languages = extract_languages(repos)
+    skills = infer_skills(repos)
+    language_tags = [l["name"] for l in languages if l["share"] >= LANGUAGE_TAG_MIN_SHARE]
+    return {
+        "all": language_tags + [s["name"] for s in skills],
+        "languages": languages,
+        "skills": skills,
+        "note": TAG_NOTE,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Report assembly
 # ---------------------------------------------------------------------------
 
@@ -1135,6 +1347,10 @@ class DetectorConfig:
     clone_dir: str = "data/github_cache"
     clone_depth: int = 1
     keep_clones: bool = True
+    # Persist the full report (tags included) to <profile_dir>/<handle>.json.
+    # Off by default: the tool writes files only when asked.
+    save_profile: bool = False
+    profile_dir: str = "data/profiles"
 
 
 def detect_github(
@@ -1349,6 +1565,7 @@ def detect_github(
             repo.readme_excerpt = client.fetch_readme_excerpt(repo.full_name)
 
     out["repositories"] = [asdict(r) for r in ranked]
+    out["tags"] = build_tags(ranked)
     rl_end = client.rate_limit()
 
     # Degraded-but-usable conditions. These are WARNINGS, not errors: the report
@@ -1419,6 +1636,22 @@ def detect_github(
             "graphql_limit": _bucket(rl_end, "graphql")["limit"],
         },
     }
+
+    if cfg.save_profile:
+        # Persist the finished report so the record survives without re-running.
+        # A failure here is a warning, never an error: the report itself is
+        # still valid and complete.
+        target = Path(cfg.profile_dir) / f"{login}.json"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(out, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            out["meta"]["profile_saved_to"] = str(target)
+        except OSError as e:
+            out["warnings"].append(f"could not save profile to {target}: {e}")
+
     return _done()
 
 

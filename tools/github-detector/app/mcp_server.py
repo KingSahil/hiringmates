@@ -120,6 +120,7 @@ def detect_github_profile(
     max_repos: int = 300,
     resolve_ambiguous: bool = True,
     max_resolve_clones: int = 10,
+    save_profile: bool = False,
 ) -> dict[str, Any]:
     """
     Parameters
@@ -146,6 +147,10 @@ def detect_github_profile(
         verdict. Without it, a broad API outage would flag every repo and
         trigger a clone of all of them. Repos past the cap are kept and
         reported in ``stats.repos_deferred_resolution``.
+    save_profile : When true, writes the full report to
+        ``data/profiles/<handle>.json`` so the record survives without
+        re-running. Off by default. The path is echoed in
+        ``meta.profile_saved_to``.
 
     Always inspect ``warnings``. A repository whose file listing could not be
     fetched has ``loc_measured: false`` and an UNKNOWN ``loc`` (not zero); it is
@@ -169,6 +174,7 @@ def detect_github_profile(
                 fetch_readmes=bool(fetch_readmes),
                 resolve_ambiguous=bool(resolve_ambiguous),
                 max_resolve_clones=max(0, int(max_resolve_clones)),
+                save_profile=bool(save_profile),
             )
             report = detect_github(handle.strip(), config=cfg)
         except Exception as e:

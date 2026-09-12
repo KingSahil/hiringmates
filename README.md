@@ -118,6 +118,41 @@ Key parameters of `detect_github_profile`:
 | `loc_strategy` | `"tree"` | Leave on `tree` unless you have a specific reason |
 | `include_forks` | `false` | Forks are not the author's own work |
 | `max_repos` | `300` | Upper bound on repositories enumerated |
+| `save_profile` | `false` | Write the full report to `data/profiles/<handle>.json` |
+
+## Tags
+
+Every response carries a `tags` block — ready-to-attach labels derived **only**
+from data already fetched (language byte totals, repository topics, and the
+structural fingerprint). **Zero extra API calls.**
+
+```jsonc
+"tags": {
+  "all": ["Python", "TypeScript", "containerisation", "ci-cd", ...],
+  "languages": [ { "name": "Python", "bytes": 1211671, "share": 0.8534, "repos": 16 } ],
+  "skills": [ { "name": "containerisation", "confidence": "high",
+                "evidence": ["has_dockerfile in 65% of ranked repos",
+                             "topic 'docker' on 6 repos"] } ]
+}
+```
+
+- `tags.all` — flat list, ready to store on a candidate record
+- `tags.languages` — every language seen, with its share of the codebase.
+  Nothing is hidden; languages under 1% share appear here but are kept out of
+  `tags.all` so they don't pollute it.
+- `tags.skills` — inferred skills with `confidence` and the `evidence` behind
+  each. `high` means two or more independent signals agreed.
+
+Example (`tiangolo`): Python 85% · TypeScript 9% · JavaScript 2% · Shell 1.6% ·
+Dockerfile 1.3%, with `backend`, `ci-cd`, `containerisation`, `github-automation`
+and `web-services` at high confidence.
+
+**These are signal aggregation, not code understanding.** They cannot tell you
+which libraries a codebase uses, how it's architected, or how good it is — that
+needs reading the code (RAG), which this tool deliberately doesn't do. Cite the
+`evidence` rather than the bare label: *"containerisation (Dockerfile in 65% of
+repos)"* is defensible; *"knows Docker"* is not. Absence of a tag means no
+signal was found, not that the skill is missing.
 
 ## Notes worth knowing
 

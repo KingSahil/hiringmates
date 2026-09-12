@@ -74,6 +74,7 @@ The server advertises itself as `hiringmates-github-detector`; check
 | `max_repos` | int | `300` | Upper bound on repos enumerated. |
 | `resolve_ambiguous` | bool | `true` | Clone repos whose LOC estimate cannot safely decide the filter (~1 extra clone/profile). `false` keeps them on the estimate instead. |
 | `max_resolve_clones` | int | `10` | Cap on repos cloned purely to settle an LOC verdict. Prevents a broad API outage from triggering a clone of every repo. |
+| `save_profile` | bool | `false` | Write the full report to `data/profiles/<handle>.json`. Path echoed in `meta.profile_saved_to`. |
 
 `loc_strategy` guidance:
 - `tree` — estimates LOC from the file tree and also yields the full
@@ -107,6 +108,55 @@ That is your job, not the tool's. The cloned shortlist gives you
 Returns the weights and hard-filter thresholds. Call this first if you need to
 **explain** or reproduce the ordering rather than just report it.
 
+## Tags
+
+`tags` gives you ready-to-attach labels for a candidate record, derived **only**
+from data already fetched — language byte totals, repository topics, and the
+structural fingerprint. **Zero extra API calls.**
+
+| Field | Contents |
+|---|---|
+| `tags.all` | Flat list, ready to store as tags. Languages first, then skills. |
+| `tags.languages` | Every language seen, with `bytes`, `share` of total code, and `repos` count. Nothing is hidden — languages below the 1% share floor appear here but are kept out of `tags.all` so they do not pollute it. |
+| `tags.skills` | Inferred skills, each with `confidence` (`high`/`medium`) and the `evidence` that fired it. |
+
+A skill fires when a structure flag ratio, repeated topic, or language share
+crosses a threshold. **Confidence is `high` when two or more independent signals
+agree**, `medium` on a single one. Topics require **2+ repositories** — a single
+mention is weak evidence, so precision is preferred over recall.
+
+Worked example (`tiangolo`):
+
+```
+languages : Python 85%, TypeScript 9%, JavaScript 2%, Shell 1.6%, Dockerfile 1.3%
+skills    : backend, ci-cd, containerisation, github-automation,
+            web-services  [high]  ·  testing, documentation,
+            open-source-hygiene, async-programming  [medium]
+```
+
+### What tags are NOT
+
+These are **signal aggregation, not code understanding.** They cannot tell you
+which libraries a codebase uses, how it is architected, or how good it is —
+that requires reading the code (RAG), which this tool deliberately does not do.
+Treat a skill tag as evidence-backed, not as a verdict, and prefer `high`
+confidence when ranking candidates. `tags.note` says the same thing
+machine-readably.
+
+When reporting, cite the evidence rather than the bare label — "containerisation
+(Dockerfile in 65% of repos; `docker` topic ×6)" is defensible, "knows Docker"
+is not.
+
+## Persisting a profile
+
+Pass `save_profile: true` to write the full report to
+`data/profiles/<handle>.json` and have the path echoed in
+`meta.profile_saved_to`. Off by default — the tool writes files only when asked.
+
+Useful when you want a record to survive without re-running the tool, or when
+comparing the same handle over time. Note that `data/` is gitignored, so saved
+profiles are local only.
+
 ## Response shape
 
 ```jsonc
@@ -130,6 +180,12 @@ Returns the weights and hard-filter thresholds. Call this first if you need to
   "ambiguity_resolved": [ { "name", "loc", "kept", "resolved_by",
                             "drop_reason" } ],
   "warnings": [],               // degraded-but-usable conditions — READ THESE
+  "tags": {                     // derived signals — see "Tags" below
+    "all": ["Python", "TypeScript", "containerisation", "ci-cd", ...],
+    "languages": [ { "name", "bytes", "share", "repos" } ],
+    "skills":    [ { "name", "confidence", "evidence": [...] } ],
+    "note": "…"
+  },
   "errors": [],
   "meta": { "loc_strategy", "top_n_clone",      // NOT "top_n"
             "ranking_weights", "generated_at", "authenticated",
@@ -333,6 +389,13 @@ measured.
     `loc_measured: false` has an UNKNOWN LOC — `loc` is 0 only because nothing
     was measured. Never report it as empty, and never filter it out. A non-empty
     `warnings` array means the report is degraded even though `errors` is empty.
+16. **`tags` are derived signals, not analysis.** They come free from data
+    already fetched and cost no API calls, but they cannot see inside the code.
+    Cite the `evidence` rather than the bare label, and prefer `high` confidence.
+    Absence of a skill tag means "no signal found", NOT "does not have the skill".
+17. **`tags` reflect only the repositories that survived the filter.** A
+    language used solely in small, unstarred repos will not appear. Treat the
+    language list as "languages visible in their significant work".
 
 ## Worked examples
 
