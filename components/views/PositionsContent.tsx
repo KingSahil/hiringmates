@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { Loader2, Sparkles, Wifi } from 'lucide-react'
+import { HireMeContent, HireMePosition } from '@/components/views/HireMeContent'
 
-interface Position {
+interface Position extends HireMePosition {
   id: string
   role: string
   description: string
@@ -46,6 +47,7 @@ const BADGE_ACCENTS = [
 ]
 
 export function PositionsContent() {
+  const [selectedProctorPosition, setSelectedProctorPosition] = useState<Position | null>(null)
   const [positions, setPositions] = useState<Position[]>([])
   const [slots, setSlots] = useState<Slot[]>([])
   const [attemptId, setAttemptId] = useState<string | null>(null)
@@ -70,33 +72,12 @@ export function PositionsContent() {
     void load()
   }, [])
 
-  const start = async (position: Position) => {
+  const start = (position: Position) => {
     setError('')
     setResult(null)
-    setBusy(true)
-    setLoadingPositionId(position.id)
-    try {
-      const { ok, data } = await api('/api/portal/attempts', {
-        method: 'POST',
-        body: JSON.stringify({ position_id: position.id }),
-      })
-      if (!ok) {
-        setError(data.message ?? data.error ?? 'Could not start this application.')
-        return
-      }
-      setAttemptId(data.attempt_id)
-      setQuestions(data.questions ?? [])
-      setActiveRole(position.role)
-      setAnswers({})
-      // Smooth scroll to top to view round 1 questions
-      if (typeof window !== 'undefined') {
-        window.scrollTo({ top: 180, behavior: 'smooth' })
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Failed to connect to assessment backend.')
-    } finally {
-      setBusy(false)
-      setLoadingPositionId(null)
+    setSelectedProctorPosition(position)
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     }
   }
 
@@ -122,6 +103,22 @@ export function PositionsContent() {
     setAttemptId(null)
     setQuestions([])
     void load()
+  }
+
+  if (selectedProctorPosition) {
+    return (
+      <HireMeContent
+        position={selectedProctorPosition}
+        onComplete={(res) => {
+          setResult({ score: res.score, passed: res.passed })
+          void load()
+        }}
+        onExit={() => {
+          setSelectedProctorPosition(null)
+          void load()
+        }}
+      />
+    )
   }
 
   return (

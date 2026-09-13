@@ -40,6 +40,7 @@ import {
 import { useNavigation } from '@/lib/navigation'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { useNotifications } from '@/lib/notifications'
+import { useAuth } from '@/lib/auth'
 import {
   CodeforcesWinnowingEngine,
   KeystrokeFlightRecorder,
@@ -50,6 +51,21 @@ import {
   PlagiarismResult,
 } from '@/lib/proctoring/antiCheatEngine'
 import { EyeTrackerEngine, GazeDirection, GazeStatus } from '@/lib/proctoring/eyeTracker'
+
+export interface HireMePosition {
+  id: string
+  role: string
+  description?: string
+  tags?: string[]
+  pass_threshold?: number
+  question_mode?: string
+}
+
+export interface HireMeContentProps {
+  position?: HireMePosition
+  onComplete?: (result: { score: number | null; passed: boolean }) => void
+  onExit?: () => void
+}
 
 type HireMeStep = 'profile' | 'invite' | 'check' | 'assessment' | 'admin' | 'results'
 
@@ -189,16 +205,38 @@ The incident response server acts as an MCP server bridging AI diagnostic agents
   },
 ]
 
-export function HireMeContent() {
+export function HireMeContent({ position, onComplete, onExit }: HireMeContentProps = {}) {
+  const { user } = useAuth()
   const { setTab } = useNavigation()
   const { triggerRound2Notification, setActiveRole } = useNotifications()
-  const [step, setStep] = useState<HireMeStep>('invite')
+  const [step, setStep] = useState<HireMeStep>(position ? 'profile' : 'invite')
+  const stepRef = useRef<HireMeStep>(position ? 'profile' : 'invite')
+  useEffect(() => {
+    stepRef.current = step
+  }, [step])
 
-  // Profile state
-  const [candidateName, setCandidateName] = useState('Maya Chen')
+  const positionAttemptIdRef = useRef<string | null>(null)
+  const [attemptScore, setAttemptScore] = useState<number | null>(null)
+  const [attemptPassed, setAttemptPassed] = useState<boolean | null>(null)
+
+  // Profile state prefilled from auth or position tags
+  const [candidateName, setCandidateName] = useState(() =>
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.email?.split('@')[0] ||
+    'Maya Chen'
+  )
   const [candidateLinkedin, setCandidateLinkedin] = useState('https://linkedin.com/in/mayachen')
-  const [candidateGithub, setCandidateGithub] = useState('https://github.com/mayachen-dev')
-  const [candidateSkills, setCandidateSkills] = useState('React, TypeScript, Next.js, Node.js, PostgreSQL')
+  const [candidateGithub, setCandidateGithub] = useState(() =>
+    user?.user_metadata?.user_name
+      ? `https://github.com/${user.user_metadata.user_name}`
+      : 'https://github.com/mayachen-dev'
+  )
+  const [candidateSkills, setCandidateSkills] = useState(() =>
+    position?.tags && position.tags.length > 0
+      ? position.tags.join(', ')
+      : 'React, TypeScript, Next.js, Node.js, PostgreSQL'
+  )
 
   // Hardware & Proctoring verification state
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null)
@@ -518,6 +556,17 @@ export function HireMeContent() {
         videoTrack.onended = () => {
           setScreenReady(false)
           setScreenStream(null)
+          // If active assessment is underway, immediately terminate session
+          if (stepRef.current === 'assessment') {
+            setIsTerminated(true)
+            setIsPaused(true)
+            setTerminationReason('Screen sharing was stopped or disconnected during active proctoring session.')
+            if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+            if (micStream) micStream.getTracks().forEach((t) => t.stop())
+            setCameraReady(false)
+            setMicReady(false)
+            setStep('results')
+          }
         }
       }
     } catch (err: any) {
@@ -536,6 +585,17 @@ export function HireMeContent() {
       screenStream.getTracks().forEach((track) => track.stop())
       setScreenStream(null)
       setScreenReady(false)
+    }
+    // If active assessment is underway, stopping screen share immediately terminates session
+    if (stepRef.current === 'assessment') {
+      setIsTerminated(true)
+      setIsPaused(true)
+      setTerminationReason('Screen sharing was stopped during active proctoring session.')
+      if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+      if (micStream) micStream.getTracks().forEach((t) => t.stop())
+      setCameraReady(false)
+      setMicReady(false)
+      setStep('results')
     }
   }
 
@@ -656,34 +716,51 @@ export function HireMeContent() {
     let questionsToUse = activeQuestions
 
     try {
-      // 1. Generate AI evaluation questions on the spot using candidate profile / GitHub
-      const res = await fetch('/api/onboarding', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          github_handle: candidateGithub,
-          candidate_name: candidateName,
-          skills: candidateSkills,
-        }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (res.ok && data?.id) {
-        ragSessionIdRef.current = data.id
-        const directList = data?.questions ?? data?.question_set?.questions
-        if (Array.isArray(directList) && directList.length > 0) {
-          questionsToUse = mapBackendQuestions(directList)
-          setActiveQuestions(questionsToUse)
-        } else {
-          // Poll for up to 8 seconds for AI question set
-          for (let attempt = 0; attempt < 6; attempt++) {
-            await new Promise((r) => setTimeout(r, 1200))
-            const pr = await fetch(`/api/onboarding?id=${encodeURIComponent(data.id)}`)
-            const pd = await pr.json().catch(() => ({}))
-            const polledList = pd?.questions ?? pd?.question_set?.questions
-            if (Array.isArray(polledList) && polledList.length > 0) {
-              questionsToUse = mapBackendQuestions(polledList)
-              setActiveQuestions(questionsToUse)
-              break
+      if (position?.id) {
+        // Fetch questions for selected job position via /api/portal/attempts
+        const res = await fetch('/api/portal/attempts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ position_id: position.id }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && data?.attempt_id) {
+          positionAttemptIdRef.current = data.attempt_id
+          if (Array.isArray(data.questions) && data.questions.length > 0) {
+            questionsToUse = mapBackendQuestions(data.questions)
+            setActiveQuestions(questionsToUse)
+          }
+        }
+      } else {
+        // 1. Generate AI evaluation questions on the spot using candidate profile / GitHub
+        const res = await fetch('/api/onboarding', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            github_handle: candidateGithub,
+            candidate_name: candidateName,
+            skills: candidateSkills,
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && data?.id) {
+          ragSessionIdRef.current = data.id
+          const directList = data?.questions ?? data?.question_set?.questions
+          if (Array.isArray(directList) && directList.length > 0) {
+            questionsToUse = mapBackendQuestions(directList)
+            setActiveQuestions(questionsToUse)
+          } else {
+            // Poll for up to 8 seconds for AI question set
+            for (let attempt = 0; attempt < 6; attempt++) {
+              await new Promise((r) => setTimeout(r, 1200))
+              const pr = await fetch(`/api/onboarding?id=${encodeURIComponent(data.id)}`)
+              const pd = await pr.json().catch(() => ({}))
+              const polledList = pd?.questions ?? pd?.question_set?.questions
+              if (Array.isArray(polledList) && polledList.length > 0) {
+                questionsToUse = mapBackendQuestions(polledList)
+                setActiveQuestions(questionsToUse)
+                break
+              }
             }
           }
         }
@@ -882,6 +959,35 @@ export function HireMeContent() {
   // Submits to the backend for grading. Best-effort: the proctored UI must
   // never block on it, and the results screen is already rendered locally.
   const submitToBackend = useCallback(async () => {
+    // 1. If this is a position-based application attempt
+    if (positionAttemptIdRef.current) {
+      try {
+        const payload = activeQuestions.map((q, i) => {
+          const a = answers[i]
+          return {
+            question_id: q.id,
+            selected_index: typeof a === 'number' ? a : null,
+            text: typeof a === 'string' ? a : '',
+          }
+        })
+        const res = await fetch(`/api/portal/attempts/${positionAttemptIdRef.current}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answers: payload }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setAttemptScore(typeof data.score === 'number' ? data.score : null)
+          setAttemptPassed(Boolean(data.passed))
+          onComplete?.({ score: data.score, passed: Boolean(data.passed) })
+        }
+      } catch {
+        /* best-effort */
+      }
+      return
+    }
+
+    // 2. Onboarding fallback session
     const sessionId = ragSessionIdRef.current
     if (!sessionId) return
     try {
@@ -899,89 +1005,12 @@ export function HireMeContent() {
     } catch {
       /* grading is best-effort */
     }
-  }, [activeQuestions, answers])
+  }, [activeQuestions, answers, onComplete])
 
   const finishAssessment = useCallback(() => {
     void submitToBackend()
     setStep('results')
   }, [submitToBackend])
-
-  // Start generation early — during the invite/check steps — so the pipeline
-  // (GitHub extraction + question generation) overlaps with hardware setup.
-  useEffect(() => {
-    if (step === 'invite' || step === 'check' || step === 'assessment') setRagStart(true)
-  }, [step])
-
-  useEffect(() => {
-    if (!ragStart) return
-    let cancelled = false
-
-    const stopPolling = () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current)
-        pollRef.current = null
-      }
-    }
-
-    const apply = (data: any) => {
-      if (cancelled) return false
-      if (!Array.isArray(data?.questions) || data.questions.length === 0) return false
-      setActiveQuestions(mapBackendQuestions(data.questions))
-      setRagStatus('ready')
-      stopPolling()
-      return true
-    }
-
-    const fail = (note: string) => {
-      if (cancelled) return
-      setRagStatus('failed')
-      setRagNote(note)
-    }
-
-    ;(async () => {
-      setRagStatus('loading')
-      try {
-        const res = await fetch('/api/onboarding', { method: 'POST' })
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          fail(
-            data?.missing
-              ? `${data.message} Missing: ${data.missing.join(', ')}.`
-              : data?.message ?? data?.error ?? 'Could not start question generation.',
-          )
-          return
-        }
-        ragSessionIdRef.current = data?.id ?? null
-        if (apply(data)) return
-        if (!ragSessionIdRef.current) {
-          fail('Backend did not return a session id.')
-          return
-        }
-        pollRef.current = setInterval(async () => {
-          try {
-            const pr = await fetch(
-              `/api/onboarding?id=${encodeURIComponent(ragSessionIdRef.current as string)}`,
-            )
-            const pd = await pr.json().catch(() => ({}))
-            if (apply(pd)) return
-            if (pd?.status === 'failed') {
-              stopPolling()
-              fail(pd?.error ?? 'Question generation failed.')
-            }
-          } catch {
-            /* transient; keep polling */
-          }
-        }, 2000)
-      } catch {
-        fail('Could not reach the onboarding API.')
-      }
-    })()
-
-    return () => {
-      cancelled = true
-      stopPolling()
-    }
-  }, [ragStart])
 
   // Re-seed the countdowns and index whenever the question set is swapped in.
   useEffect(() => {
@@ -1369,7 +1398,13 @@ export function HireMeContent() {
 
             <div className="mt-6 flex items-center justify-between border-t border-[#171717]/15 pt-4 dark:border-[#2e323b]">
               <button
-                onClick={() => setStep('invite')}
+                onClick={() => {
+                  if (position && onExit) {
+                    onExit()
+                  } else {
+                    setStep('invite')
+                  }
+                }}
                 className="btn-neo btn-neo-paper py-2 text-xs"
               >
                 <ArrowLeft className="h-3.5 w-3.5" /> Back
@@ -2520,23 +2555,31 @@ export function HireMeContent() {
                 </div>
 
                 <h2 className="mt-4 font-display text-4xl uppercase text-[#171717] dark:text-[#f4f4f7]">
-                  Assessment Submitted
+                  {attemptPassed === false ? 'Assessment Completed' : 'Assessment Cleared'}
                 </h2>
                 <p className="mt-1 text-xs font-bold text-[#171717]/70 dark:text-[#a1a1aa]">
-                  Your responses for MCP Challenge and Technical Writing have been submitted to Northstar Systems.
+                  {position?.role
+                    ? `Your responses for ${position.role} round 1 have been recorded.`
+                    : 'Your responses have been submitted to the engineering review platform.'}
                 </p>
 
                 <div className="mt-5 grid grid-cols-3 gap-2.5">
                   <div className="rounded-xl border border-[#171717] bg-[#e0fbf9] p-3 dark:border-[#000000]">
-                    <div className="font-display text-2xl text-[#171717]">96/100</div>
+                    <div className="font-display text-2xl text-[#171717]">
+                      {attemptScore !== null ? `${attemptScore}%` : '96/100'}
+                    </div>
                     <div className="text-[9px] font-black uppercase text-[#171717]/60">Score</div>
                   </div>
                   <div className="rounded-xl border border-[#171717] bg-[#fff0c2] p-3 dark:border-[#000000]">
-                    <div className="font-display text-2xl text-[#171717]">2 / 2</div>
+                    <div className="font-display text-2xl text-[#171717]">
+                      {Object.keys(answers).length} / {activeQuestions.length}
+                    </div>
                     <div className="text-[9px] font-black uppercase text-[#171717]/60">Finished</div>
                   </div>
                   <div className="rounded-xl border border-[#171717] bg-[#ffe6f8] p-3 dark:border-[#000000]">
-                    <div className="font-display text-2xl text-[#ff57ce]">CLEAR</div>
+                    <div className="font-display text-2xl text-[#ff57ce]">
+                      {attemptPassed === false ? 'REVISE' : 'CLEAR'}
+                    </div>
                     <div className="text-[9px] font-black uppercase text-[#171717]/60">Integrity</div>
                   </div>
                 </div>
@@ -2664,17 +2707,27 @@ export function HireMeContent() {
                 </div>
 
                 <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  <button
-                    onClick={() => {
-                      triggerRound2Notification('mentor', candidateName)
-                      setActiveRole('candidate')
-                      setTab('mentorship')
-                    }}
-                    className="btn-neo btn-neo-lemon py-2 px-4 text-xs flex items-center gap-1.5"
-                  >
-                    <Video className="h-3.5 w-3.5 fill-current" />
-                    <span>Join Round 2: Mentorship Call</span>
-                  </button>
+                  {onExit ? (
+                    <button
+                      onClick={onExit}
+                      className="btn-neo btn-neo-aqua py-2 px-4 text-xs flex items-center gap-1.5"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      <span>Back to Positions</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        triggerRound2Notification('mentor', candidateName)
+                        setActiveRole('candidate')
+                        setTab('mentorship')
+                      }}
+                      className="btn-neo btn-neo-lemon py-2 px-4 text-xs flex items-center gap-1.5"
+                    >
+                      <Video className="h-3.5 w-3.5 fill-current" />
+                      <span>Join Round 2: Mentorship Call</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => setTab('codemates')}
                     className="btn-neo btn-neo-berry py-2 text-xs"
