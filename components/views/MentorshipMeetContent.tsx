@@ -32,6 +32,8 @@ import {
 import { useNavigation } from '@/lib/navigation'
 import { useNotifications, UserRole } from '@/lib/notifications'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
+import { isMentor as isMentorEmail } from '@/lib/portal'
 
 interface ChatMessage {
   id: string
@@ -47,23 +49,48 @@ interface FloatingReaction {
   x: number
 }
 
+const RTC_CONFIG: RTCConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+  ],
+}
+
 export function MentorshipMeetContent() {
   const { setTab } = useNavigation()
   const { activeRole, setActiveRole } = useNotifications()
+  const { user, isAuthorized } = useAuth()
 
   // Meeting Identity & Roles
-  const [meetingId] = useState('mentorship-r2-northstar')
+  const [meetingId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const fromUrl = new URLSearchParams(window.location.search).get('meeting')
+      if (fromUrl) return fromUrl
+    }
+    return 'mentorship-r2-northstar'
+  })
   const [copiedLink, setCopiedLink] = useState(false)
-  const isMentor = activeRole === 'mentor'
+  const isMentor = isAuthorized ? isMentorEmail(user?.email) : activeRole === 'mentor'
 
-  const myName = isMentor ? 'Sarah Vance' : 'Maya Chen'
+  // Dynamic names with fallback
+  const myName =
+    user?.user_metadata?.display_name ||
+    user?.user_metadata?.full_name ||
+    (user?.email ? user.email.split('@')[0] : isMentor ? 'Sarah Vance' : 'Maya Chen')
   const myRoleLabel = isMentor ? 'Lead Mentor (Staff Eng)' : 'Candidate (Full-Stack)'
-  const peerName = isMentor ? 'Maya Chen' : 'Sarah Vance'
-  const peerRoleLabel = isMentor ? 'Candidate (Round 2)' : 'Lead Mentor (Staff Eng)'
+
+  const [remotePeerName, setRemotePeerName] = useState<string>('')
+  const [remotePeerRole, setRemotePeerRole] = useState<string>('')
+
+  const peerName = remotePeerName || (isMentor ? 'Maya Chen' : 'Sarah Vance')
+  const peerRoleLabel = remotePeerRole || (isMentor ? 'Candidate (Round 2)' : 'Lead Mentor (Staff Eng)')
 
   // Media Streams State
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null)
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
+
   const [isCameraOn, setIsCameraOn] = useState(true)
   const [isMicOn, setIsMicOn] = useState(true)
   const [isScreenSharing, setIsScreenSharing] = useState(false)
@@ -72,15 +99,24 @@ export function MentorshipMeetContent() {
   const [mediaError, setMediaError] = useState<string | null>(null)
 
   // Remote counterpart state
-  const [remoteConnected, setRemoteConnected] = useState(true)
+  const [remoteConnected, setRemoteConnected] = useState(false)
   const [peerCameraOn, setPeerCameraOn] = useState(true)
+  const [peerMicOn, setPeerMicOn] = useState(true)
+  const [connectionStatus, setConnectionStatus] = useState<'waiting' | 'connecting' | 'connected' | 'failed'>('waiting')
+
+  // Client unique ID for polite WebRTC negotiation
+  const [clientId] = useState(() =>
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `client-${Math.random().toString(36).slice(2, 9)}`
+  )
 
   // Drawer / Side Panel State
   const [activeSidePanel, setActiveSidePanel] = useState<'chat' | 'scratchpad' | 'rubric' | 'captions' | null>('chat')
   const [unreadChatCount, setUnreadChatCount] = useState(0)
 
   // Elapsed Call Timer
-  const [callDuration, setCallDuration] = useState(14 * 60 + 20) // Start at realistic 14:20
+  const [callDuration, setCallDuration] = useState(0)
   useEffect(() => {
     const timer = setInterval(() => {
       setCallDuration((prev) => prev + 1)
@@ -102,17 +138,10 @@ export function MentorshipMeetContent() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       id: 'msg-1',
-      sender: 'Sarah Vance',
+      sender: 'System',
       role: 'mentor',
-      text: "Welcome to Round 2! We'll review your distributed task worker design and discuss architectural failure modes.",
-      time: '14:21',
-    },
-    {
-      id: 'msg-2',
-      sender: 'Maya Chen',
-      role: 'candidate',
-      text: 'Thanks Sarah! Ready to walk through the retry logic and event loop bottlenecks.',
-      time: '14:22',
+      text: `Private mentorship session initialized (${meetingId}). Realtime WebRTC signaling active.`,
+      time: 'Now',
     },
   ])
   const [chatInput, setChatInput] = useState('')
@@ -155,17 +184,23 @@ class DistributedTaskWorker {
   // Captions & Live Transcription
   const [captionsEnabled, setCaptionsEnabled] = useState(true)
   const [currentCaption, setCurrentCaption] = useState(
-    'Sarah Vance: "How would you handle network partitions between the primary Redis node and standby replicas during lock renewal?"'
+    'Real-time P2P encrypted session established. Both audio, video, and code scratchpad are connected.'
   )
 
-  // Video Element References
+  // Element & WebRTC References
   const localVideoRef = useRef<HTMLVideoElement | null>(null)
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null)
   const screenVideoRef = useRef<HTMLVideoElement | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number | null>(null)
 
-  // Initialize Local Media Stream (Camera & Mic)
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([])
+  const channelRef = useRef<any>(null)
+  const makingOfferRef = useRef<boolean>(false)
+
+  // 1. Initialize Local Media Stream (Camera & Mic)
   useEffect(() => {
     let stream: MediaStream | null = null
 
@@ -188,7 +223,7 @@ class DistributedTaskWorker {
           localVideoRef.current.srcObject = stream
         }
 
-        // Set up audio visualizer
+        // Setup audio visualizer for local mic
         try {
           const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
           if (AudioContextClass) {
@@ -215,11 +250,10 @@ class DistributedTaskWorker {
         }
       } catch (err: any) {
         console.warn('Camera/Mic permission warning:', err)
-        // Fallback gracefully without blocking the UI
         setMediaError(
           err.name === 'NotAllowedError'
-            ? 'Camera/Mic access was denied. You can continue with simulated camera & audio.'
-            : 'Hardware unavailable. Running in simulated interactive video mode.'
+            ? 'Camera/Mic access was denied. You can continue with screen share and audio.'
+            : 'Hardware unavailable. Running in simulated interactive mode.'
         )
       }
     }
@@ -239,7 +273,335 @@ class DistributedTaskWorker {
     }
   }, [])
 
-  // Re-attach camera stream to video ref whenever localStream, camera state, or view mode changes
+  // 2. Setup WebRTC Peer Connection Factory
+  const getOrCreatePeerConnection = useCallback(() => {
+    if (peerConnectionRef.current) return peerConnectionRef.current
+
+    const pc = new RTCPeerConnection(RTC_CONFIG)
+    peerConnectionRef.current = pc
+
+    // Add local tracks if available
+    if (localStream) {
+      localStream.getTracks().forEach((track) => {
+        try {
+          pc.addTrack(track, localStream)
+        } catch {
+          // ignore duplicate track
+        }
+      })
+    }
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate && channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'webrtc-ice',
+          payload: { candidate: event.candidate, senderId: clientId },
+        })
+      }
+    }
+
+    pc.ontrack = (event) => {
+      if (event.streams && event.streams[0]) {
+        const stream = event.streams[0]
+        setRemoteStream(stream)
+        setRemoteConnected(true)
+        setConnectionStatus('connected')
+
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = stream
+          remoteVideoRef.current.play().catch(() => {})
+        }
+      }
+    }
+
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState
+      if (state === 'connected') {
+        setConnectionStatus('connected')
+        setRemoteConnected(true)
+      } else if (state === 'connecting') {
+        setConnectionStatus('connecting')
+      } else if (state === 'disconnected' || state === 'failed') {
+        setConnectionStatus('failed')
+      } else if (state === 'closed') {
+        setConnectionStatus('waiting')
+        setRemoteStream(null)
+      }
+    }
+
+    return pc
+  }, [localStream, clientId])
+
+  // 3. Keep local stream tracks synced to peer connection
+  useEffect(() => {
+    if (!localStream || !peerConnectionRef.current) return
+    const pc = peerConnectionRef.current
+    const senders = pc.getSenders()
+
+    localStream.getTracks().forEach((track) => {
+      const existing = senders.find((s) => s.track?.kind === track.kind)
+      if (existing) {
+        existing.replaceTrack(track).catch(() => {})
+      } else {
+        try {
+          pc.addTrack(track, localStream)
+        } catch {
+          // ignore
+        }
+      }
+    })
+  }, [localStream])
+
+  // 4. Remote audio activity detector (Authentic remote speaking pulse)
+  useEffect(() => {
+    if (!remoteStream || remoteStream.getAudioTracks().length === 0) return
+    let animId: number
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+      if (!AudioContextClass) return
+      const ctx = new AudioContextClass()
+      const source = ctx.createMediaStreamSource(remoteStream)
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 64
+      source.connect(analyser)
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount)
+      const checkAudio = () => {
+        analyser.getByteFrequencyData(dataArray)
+        const avg = dataArray.reduce((acc, val) => acc + val, 0) / dataArray.length
+        setIsPeerSpeaking(avg > 18)
+        animId = requestAnimationFrame(checkAudio)
+      }
+      checkAudio()
+
+      return () => {
+        cancelAnimationFrame(animId)
+        ctx.close().catch(() => {})
+      }
+    } catch {
+      // fallback
+    }
+  }, [remoteStream])
+
+  // 5. Hot-swap video track when screen share starts or stops
+  useEffect(() => {
+    if (!peerConnectionRef.current) return
+    const pc = peerConnectionRef.current
+    const videoSender = pc.getSenders().find((s) => s.track?.kind === 'video')
+    if (videoSender) {
+      const trackToUse =
+        isScreenSharing && screenStream
+          ? screenStream.getVideoTracks()[0]
+          : localStream && isCameraOn
+          ? localStream.getVideoTracks()[0]
+          : null
+
+      if (trackToUse) {
+        videoSender.replaceTrack(trackToUse).catch(() => {})
+      }
+    }
+  }, [isScreenSharing, screenStream, localStream, isCameraOn])
+
+  // 6. Supabase Realtime WebRTC Signaling Channel
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient()
+    const channelTopic = `mentorship-room-${meetingId}`
+    const channel = supabase.channel(channelTopic, {
+      config: { broadcast: { self: false } },
+    })
+    channelRef.current = channel
+
+    const createAndSendOffer = async (pc: RTCPeerConnection) => {
+      try {
+        makingOfferRef.current = true
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true,
+        })
+        await pc.setLocalDescription(offer)
+        channel.send({
+          type: 'broadcast',
+          event: 'webrtc-offer',
+          payload: {
+            sdp: pc.localDescription,
+            senderId: clientId,
+            senderName: myName,
+            senderRole: myRoleLabel,
+          },
+        })
+      } catch (err) {
+        console.warn('Error creating WebRTC offer:', err)
+      } finally {
+        makingOfferRef.current = false
+      }
+    }
+
+    channel
+      // A new peer entered the room
+      .on('broadcast', { event: 'webrtc-join' }, async ({ payload }: any) => {
+        if (!payload || payload.clientId === clientId) return
+        if (payload.name) setRemotePeerName(payload.name)
+        if (payload.role) setRemotePeerRole(payload.role)
+
+        // Greet back with our presence
+        channel.send({
+          type: 'broadcast',
+          event: 'webrtc-peer-ready',
+          payload: { clientId, name: myName, role: myRoleLabel, isCameraOn, isMicOn },
+        })
+
+        // Deterministic initiator: Mentor initiates, or compare clientIds if roles match
+        const shouldInitiate = isMentor || (!payload.isMentor && clientId > payload.clientId)
+        if (shouldInitiate) {
+          const pc = getOrCreatePeerConnection()
+          setConnectionStatus('connecting')
+          await createAndSendOffer(pc)
+        }
+      })
+      // Peer greeted us back
+      .on('broadcast', { event: 'webrtc-peer-ready' }, async ({ payload }: any) => {
+        if (!payload || payload.clientId === clientId) return
+        if (payload.name) setRemotePeerName(payload.name)
+        if (payload.role) setRemotePeerRole(payload.role)
+        if (typeof payload.isCameraOn === 'boolean') setPeerCameraOn(payload.isCameraOn)
+        if (typeof payload.isMicOn === 'boolean') setPeerMicOn(payload.isMicOn)
+
+        const shouldInitiate = isMentor || (!payload.isMentor && clientId > payload.clientId)
+        if (shouldInitiate) {
+          const pc = getOrCreatePeerConnection()
+          setConnectionStatus('connecting')
+          await createAndSendOffer(pc)
+        }
+      })
+      // Incoming SDP Offer
+      .on('broadcast', { event: 'webrtc-offer' }, async ({ payload }: any) => {
+        if (!payload || payload.senderId === clientId || !payload.sdp) return
+        if (payload.senderName) setRemotePeerName(payload.senderName)
+        if (payload.senderRole) setRemotePeerRole(payload.senderRole)
+
+        try {
+          const pc = getOrCreatePeerConnection()
+          setConnectionStatus('connecting')
+          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
+
+          // Drain queued ICE candidates
+          while (pendingCandidatesRef.current.length > 0) {
+            const cand = pendingCandidatesRef.current.shift()
+            if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand))
+          }
+
+          const answer = await pc.createAnswer()
+          await pc.setLocalDescription(answer)
+
+          channel.send({
+            type: 'broadcast',
+            event: 'webrtc-answer',
+            payload: { sdp: pc.localDescription, senderId: clientId, senderName: myName },
+          })
+        } catch (err) {
+          console.warn('Error handling WebRTC offer:', err)
+        }
+      })
+      // Incoming SDP Answer
+      .on('broadcast', { event: 'webrtc-answer' }, async ({ payload }: any) => {
+        if (!payload || payload.senderId === clientId || !payload.sdp) return
+        if (payload.senderName) setRemotePeerName(payload.senderName)
+
+        try {
+          const pc = getOrCreatePeerConnection()
+          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
+
+          // Drain queued ICE candidates
+          while (pendingCandidatesRef.current.length > 0) {
+            const cand = pendingCandidatesRef.current.shift()
+            if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand))
+          }
+        } catch (err) {
+          console.warn('Error handling WebRTC answer:', err)
+        }
+      })
+      // Incoming ICE Candidate
+      .on('broadcast', { event: 'webrtc-ice' }, async ({ payload }: any) => {
+        if (!payload || payload.senderId === clientId || !payload.candidate) return
+
+        try {
+          const pc = getOrCreatePeerConnection()
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate))
+          } else {
+            pendingCandidatesRef.current.push(payload.candidate)
+          }
+        } catch (err) {
+          console.warn('Error adding ICE candidate:', err)
+        }
+      })
+      // Peer media state updates
+      .on('broadcast', { event: 'peer-media-state' }, ({ payload }: any) => {
+        if (!payload || payload.senderId === clientId) return
+        if (typeof payload.isCameraOn === 'boolean') setPeerCameraOn(payload.isCameraOn)
+        if (typeof payload.isMicOn === 'boolean') setPeerMicOn(payload.isMicOn)
+      })
+      // Peer exited call
+      .on('broadcast', { event: 'peer-leave' }, ({ payload }: any) => {
+        if (!payload || payload.senderId === clientId) return
+        setConnectionStatus('waiting')
+        setRemoteStream(null)
+        setRemoteConnected(false)
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
+      })
+      // In-Call Chat Messages
+      .on('broadcast', { event: 'chat-message' }, ({ payload }: any) => {
+        if (payload) {
+          setChatMessages((prev) => [...prev, payload])
+          if (activeSidePanel !== 'chat') {
+            setUnreadChatCount((c) => c + 1)
+          }
+        }
+      })
+      // Floating Emoji Reactions
+      .on('broadcast', { event: 'reaction' }, ({ payload }: any) => {
+        if (payload?.emoji) {
+          triggerEmojiFloat(payload.emoji)
+        }
+      })
+      // Collaborative Scratchpad Code
+      .on('broadcast', { event: 'scratchpad-update' }, ({ payload }: any) => {
+        if (payload?.code) {
+          setScratchpadCode(payload.code)
+        }
+      })
+      .subscribe((status: string) => {
+        if (status === 'SUBSCRIBED') {
+          // Announce presence to room
+          channel.send({
+            type: 'broadcast',
+            event: 'webrtc-join',
+            payload: { clientId, name: myName, role: myRoleLabel, isMentor, isCameraOn, isMicOn },
+          })
+        }
+      })
+
+    return () => {
+      try {
+        channel.send({
+          type: 'broadcast',
+          event: 'peer-leave',
+          payload: { senderId: clientId },
+        })
+      } catch {
+        // ignore
+      }
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close()
+        peerConnectionRef.current = null
+      }
+      channelRef.current = null
+      supabase.removeChannel(channel)
+    }
+  }, [meetingId, clientId, myName, myRoleLabel, isMentor, getOrCreatePeerConnection, isCameraOn, isMicOn, activeSidePanel])
+
+  // Re-attach camera stream to local video ref
   useEffect(() => {
     if (localVideoRef.current && localStream && isCameraOn) {
       localVideoRef.current.srcObject = localStream
@@ -247,7 +609,7 @@ class DistributedTaskWorker {
     }
   }, [localStream, isCameraOn, isScreenSharing])
 
-  // Re-attach screen stream to video ref whenever screenStream changes or screen sharing mounts
+  // Re-attach screen stream to video ref
   useEffect(() => {
     if (screenVideoRef.current && screenStream) {
       screenVideoRef.current.srcObject = screenStream
@@ -259,25 +621,39 @@ class DistributedTaskWorker {
 
   // Toggle Camera
   const toggleCamera = useCallback(() => {
+    const nextState = !isCameraOn
     if (localStream) {
       const videoTrack = localStream.getVideoTracks()[0]
       if (videoTrack) {
-        videoTrack.enabled = !isCameraOn
+        videoTrack.enabled = nextState
       }
     }
-    setIsCameraOn((prev) => !prev)
-  }, [localStream, isCameraOn])
+    setIsCameraOn(nextState)
+
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'peer-media-state',
+      payload: { isCameraOn: nextState, isMicOn, senderId: clientId },
+    })
+  }, [localStream, isCameraOn, isMicOn, clientId])
 
   // Toggle Microphone
   const toggleMicrophone = useCallback(() => {
+    const nextState = !isMicOn
     if (localStream) {
       const audioTrack = localStream.getAudioTracks()[0]
       if (audioTrack) {
-        audioTrack.enabled = !isMicOn
+        audioTrack.enabled = nextState
       }
     }
-    setIsMicOn((prev) => !prev)
-  }, [localStream, isMicOn])
+    setIsMicOn(nextState)
+
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'peer-media-state',
+      payload: { isCameraOn, isMicOn: nextState, senderId: clientId },
+    })
+  }, [localStream, isCameraOn, isMicOn, clientId])
 
   // Stop Screen Share cleanly
   const stopScreenShare = useCallback(() => {
@@ -320,7 +696,6 @@ class DistributedTaskWorker {
         setScreenStream(sStream)
         setIsScreenSharing(true)
 
-        // Try immediate assignment if element already exists
         if (screenVideoRef.current) {
           screenVideoRef.current.srcObject = sStream
           screenVideoRef.current.play().catch(() => {})
@@ -334,37 +709,6 @@ class DistributedTaskWorker {
       }
     }
   }, [isScreenSharing, stopScreenShare])
-
-  // Supabase Realtime Broadcast for In-Call Chat & Reactions
-  useEffect(() => {
-    const supabase = getSupabaseBrowserClient()
-    const channel = supabase.channel(`mentorship-room-${meetingId}`)
-
-    channel
-      .on('broadcast', { event: 'chat-message' }, ({ payload }: { payload: any }) => {
-        if (payload) {
-          setChatMessages((prev) => [...prev, payload])
-          if (activeSidePanel !== 'chat') {
-            setUnreadChatCount((c) => c + 1)
-          }
-        }
-      })
-      .on('broadcast', { event: 'reaction' }, ({ payload }: { payload: any }) => {
-        if (payload?.emoji) {
-          triggerEmojiFloat(payload.emoji)
-        }
-      })
-      .on('broadcast', { event: 'scratchpad-update' }, ({ payload }: { payload: any }) => {
-        if (payload?.code) {
-          setScratchpadCode(payload.code)
-        }
-      })
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [meetingId, activeSidePanel])
 
   // Send Chat Message
   const sendChatMessage = (e?: React.FormEvent) => {
@@ -404,10 +748,9 @@ class DistributedTaskWorker {
   // Trigger Floating Emoji Reaction
   const triggerEmojiFloat = (emoji: string) => {
     const id = `reaction-${Date.now()}-${Math.random()}`
-    const x = Math.floor(Math.random() * 60) + 20 // 20% to 80% horizontal offset
+    const x = Math.floor(Math.random() * 60) + 20
     setFloatingReactions((prev) => [...prev, { id, emoji, x }])
 
-    // Clean up after 2.5 seconds
     setTimeout(() => {
       setFloatingReactions((prev) => prev.filter((r) => r.id !== id))
     }, 2500)
@@ -430,34 +773,11 @@ class DistributedTaskWorker {
 
   // Copy Room Link
   const handleCopyLink = () => {
-    const url = `${window.location.origin}/mentorship`
+    const url = `${window.location.origin}/mentorship?meeting=${encodeURIComponent(meetingId)}`
     navigator.clipboard.writeText(url)
     setCopiedLink(true)
     setTimeout(() => setCopiedLink(false), 2000)
   }
-
-  // Peer speaking simulation cycles for realistic atmosphere
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setIsPeerSpeaking((prev) => !prev)
-      if (!isMentor) {
-        const sampleCaptions = [
-          'Sarah Vance: "Notice how the backoff interval prevents cascading thundering herd failures."',
-          'Sarah Vance: "Could we utilize Redis Streams with consumer groups for automatic ACK tracking?"',
-          'Sarah Vance: "Your memory bounding logic is clean. Let\'s review failure recovery."',
-        ]
-        setCurrentCaption(sampleCaptions[Math.floor(Math.random() * sampleCaptions.length)])
-      } else {
-        const candidateCaptions = [
-          'Maya Chen: "We set a 5-second redlock lease and run a heartbeat task to renew if still processing."',
-          'Maya Chen: "For backpressure, we reject incoming requests when queue length exceeds 10,000."',
-          'Maya Chen: "If the master fails, the standby replica acquires the lease after timeout expires."',
-        ]
-        setCurrentCaption(candidateCaptions[Math.floor(Math.random() * candidateCaptions.length)])
-      }
-    }, 9000)
-    return () => clearInterval(interval)
-  }, [isMentor])
 
   return (
     <div className="relative flex h-[calc(100vh-65px)] w-full flex-col overflow-hidden bg-[#0c0d11] text-[#f4f4f7] select-none font-sans">
@@ -479,7 +799,15 @@ class DistributedTaskWorker {
         {/* Left: Meeting Identity & Round Badge */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <span className="flex h-3 w-3 rounded-full bg-emerald-500 animate-pulse" />
+            <span
+              className={`flex h-3 w-3 rounded-full ${
+                connectionStatus === 'connected'
+                  ? 'bg-emerald-500 animate-pulse'
+                  : connectionStatus === 'connecting'
+                  ? 'bg-amber-500 animate-pulse'
+                  : 'bg-zinc-500'
+              }`}
+            />
             <h1 className="font-display text-lg uppercase tracking-wider text-white hidden sm:inline">
               Mates Meet · Round 2 Mentorship
             </h1>
@@ -487,7 +815,7 @@ class DistributedTaskWorker {
           </div>
 
           <span className="rounded-md border border-[#2e323b] bg-[#ffd84d] px-2 py-0.5 font-mono text-[10px] font-black uppercase text-[#171717]">
-            Live Call
+            {connectionStatus === 'connected' ? 'Live P2P' : connectionStatus === 'connecting' ? 'Connecting' : 'Ready'}
           </span>
 
           <div className="hidden lg:flex items-center gap-1.5 rounded-lg border border-[#2e323b] bg-[#1a1d24] px-2.5 py-1 text-xs font-mono text-zinc-300">
@@ -507,7 +835,7 @@ class DistributedTaskWorker {
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
-              Candidate (Maya)
+              Candidate
             </button>
             <button
               onClick={() => setActiveRole('mentor')}
@@ -517,7 +845,7 @@ class DistributedTaskWorker {
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
-              Mentor (Sarah)
+              Mentor
             </button>
           </div>
         </div>
@@ -526,7 +854,7 @@ class DistributedTaskWorker {
         <div className="flex items-center gap-2.5">
           <div className="hidden md:flex items-center gap-1.5 rounded-lg border border-[#2e323b] bg-[#1a1d24] px-2.5 py-1 text-[11px] font-semibold text-emerald-400">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-            <span>1080p WebRTC Encrypted</span>
+            <span>WebRTC P2P Direct</span>
           </div>
 
           <button
@@ -544,10 +872,10 @@ class DistributedTaskWorker {
       <div className="flex flex-1 overflow-hidden">
         {/* Video Conference Stage */}
         <div className="relative flex flex-1 flex-col justify-between p-3 sm:p-5 overflow-hidden">
-          {/* Active Screen Sharing Canvas (if active) */}
+          {/* Active Screen Sharing Canvas */}
           {isScreenSharing ? (
             <div className="flex flex-1 gap-4 overflow-hidden">
-              {/* Big Screen Presentation */}
+              {/* Screen Presentation */}
               <div className="relative flex flex-1 items-center justify-center rounded-2xl border-3 border-[#2e323b] bg-[#121318] shadow-[5px_5px_0_#000000] overflow-hidden">
                 <video
                   ref={(el) => {
@@ -578,11 +906,25 @@ class DistributedTaskWorker {
               <div className="flex w-64 flex-col gap-3 shrink-0">
                 {/* Peer PIP */}
                 <div className="relative aspect-video w-full rounded-xl border-2 border-[#2e323b] bg-[#181b22] overflow-hidden">
-                  <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-900/60 to-purple-950/60">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/20 bg-[#39d5c8] text-base font-black text-black">
-                      {peerName.slice(0, 1)}
+                  {peerCameraOn && remoteStream ? (
+                    <video
+                      ref={(el) => {
+                        if (el && remoteStream && el.srcObject !== remoteStream) {
+                          el.srcObject = remoteStream
+                          el.play().catch(() => {})
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-900/60 to-purple-950/60">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/20 bg-[#39d5c8] text-base font-black text-black">
+                        {peerName.slice(0, 1)}
+                      </div>
                     </div>
-                  </div>
+                  )}
                   <span className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white">
                     {peerName}
                   </span>
@@ -647,7 +989,6 @@ class DistributedTaskWorker {
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#181b22] to-[#0f1115]">
                     <div className="relative flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full border-4 border-[#171717] bg-[#ffd84d] text-3xl sm:text-4xl font-black text-[#171717] shadow-xl">
                       {myName.slice(0, 1)}
-                      {/* Wave pulse if mic is active while camera is off */}
                       {isMicOn && localAudioLevel > 10 && (
                         <span className="absolute inset-0 rounded-full border-4 border-[#ffd84d] animate-ping opacity-40" />
                       )}
@@ -658,7 +999,7 @@ class DistributedTaskWorker {
                   </div>
                 )}
 
-                {/* Dark gradient vignette for readability */}
+                {/* Dark gradient vignette */}
                 <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
 
                 {/* Top Tile Badges */}
@@ -709,7 +1050,7 @@ class DistributedTaskWorker {
                 </div>
               </div>
 
-              {/* TILE 2: REMOTE PARTICIPANT (Mentor or Candidate) */}
+              {/* TILE 2: REMOTE PARTICIPANT (WebRTC Real Video Stream) */}
               <div
                 className={`group relative flex flex-col justify-between rounded-2xl border-3 bg-[#13151b] p-4 shadow-[5px_5px_0_#000000] overflow-hidden transition-all duration-300 ${
                   isPeerSpeaking
@@ -717,34 +1058,55 @@ class DistributedTaskWorker {
                     : 'border-[#2e323b]'
                 }`}
               >
-                {/* Simulated Peer Feed / Interactive Video Visualizer */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#1c1f28] to-[#101217]">
-                  {/* Subtle video noise pattern / radar backdrop */}
-                  <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#39d5c8_1px,transparent_1px)] [background-size:16px_16px]" />
+                {/* Real Live Remote Video or Avatar Fallback */}
+                {peerCameraOn && remoteStream ? (
+                  <video
+                    ref={(el) => {
+                      remoteVideoRef.current = el
+                      if (el && remoteStream && el.srcObject !== remoteStream) {
+                        el.srcObject = remoteStream
+                        el.play().catch(() => {})
+                      }
+                    }}
+                    autoPlay
+                    playsInline
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#1c1f28] to-[#101217]">
+                    <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#39d5c8_1px,transparent_1px)] [background-size:16px_16px]" />
 
-                  <div className="relative flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full border-4 border-[#171717] bg-[#39d5c8] text-3xl sm:text-4xl font-black text-[#171717] shadow-xl">
-                    {peerName.slice(0, 1)}
+                    <div className="relative flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full border-4 border-[#171717] bg-[#39d5c8] text-3xl sm:text-4xl font-black text-[#171717] shadow-xl">
+                      {peerName.slice(0, 1)}
+                      {isPeerSpeaking && (
+                        <span className="absolute -inset-2 rounded-full border-2 border-[#ffd84d] animate-ping opacity-60" />
+                      )}
+                    </div>
 
-                    {/* Active speaking pulse */}
-                    {isPeerSpeaking && (
-                      <span className="absolute -inset-2 rounded-full border-2 border-[#ffd84d] animate-ping opacity-60" />
+                    <span className="mt-4 font-display text-lg uppercase text-white tracking-wide">
+                      {peerName}
+                    </span>
+                    <span className="text-xs font-semibold text-zinc-400">
+                      {peerRoleLabel}
+                    </span>
+
+                    {connectionStatus === 'waiting' && (
+                      <span className="mt-3 rounded-full bg-black/60 border border-white/20 px-3 py-1 text-[10px] font-mono text-zinc-300">
+                        Waiting for counterpart to join...
+                      </span>
+                    )}
+                    {connectionStatus === 'connecting' && (
+                      <span className="mt-3 rounded-full bg-amber-500/20 border border-amber-500/40 px-3 py-1 text-[10px] font-mono text-amber-300 animate-pulse">
+                        Connecting WebRTC P2P...
+                      </span>
+                    )}
+                    {connectionStatus === 'connected' && !peerCameraOn && (
+                      <span className="mt-2 text-xs font-bold text-zinc-400">
+                        Camera turned off
+                      </span>
                     )}
                   </div>
-
-                  <span className="mt-4 font-display text-lg uppercase text-white tracking-wide">
-                    {peerName}
-                  </span>
-                  <span className="text-xs font-semibold text-zinc-400">
-                    {peerRoleLabel}
-                  </span>
-
-                  {isPeerSpeaking && (
-                    <div className="mt-3 flex items-center gap-1.5 rounded-full border border-[#ffd84d]/40 bg-[#ffd84d]/10 px-3 py-0.5 text-[10px] font-black uppercase text-[#ffd84d]">
-                      <Radio className="h-3 w-3 animate-pulse" />
-                      <span>Speaking Now</span>
-                    </div>
-                  )}
-                </div>
+                )}
 
                 {/* Dark gradient vignette */}
                 <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
@@ -759,8 +1121,8 @@ class DistributedTaskWorker {
 
                   {/* Remote Audio Status */}
                   <div className="flex items-center gap-1.5 rounded-lg border border-black/40 bg-black/60 px-2.5 py-1 text-xs text-emerald-400 backdrop-blur-md">
-                    <Volume2 className="h-3.5 w-3.5" />
-                    <span className="text-[10px] font-mono">HD Audio</span>
+                    {peerMicOn ? <Volume2 className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5 text-rose-400" />}
+                    <span className="text-[10px] font-mono">{peerMicOn ? 'HD Audio' : 'Muted'}</span>
                   </div>
                 </div>
 
@@ -776,15 +1138,27 @@ class DistributedTaskWorker {
                   </div>
 
                   <span className="text-[10px] font-mono text-emerald-400 bg-black/50 px-2 py-0.5 rounded flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Connected
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        connectionStatus === 'connected'
+                          ? 'bg-emerald-400 animate-pulse'
+                          : connectionStatus === 'connecting'
+                          ? 'bg-amber-400 animate-pulse'
+                          : 'bg-zinc-500'
+                      }`}
+                    />
+                    {connectionStatus === 'connected'
+                      ? 'P2P Live'
+                      : connectionStatus === 'connecting'
+                      ? 'Connecting'
+                      : 'Waiting'}
                   </span>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Live Captions Bar (Subtitles toggleable) */}
+          {/* Live Captions Bar */}
           {captionsEnabled && (
             <div className="mt-3 flex items-center justify-center">
               <div className="max-w-2xl rounded-xl border border-white/15 bg-black/80 px-4 py-2 text-center text-xs font-medium text-zinc-200 backdrop-blur-md shadow-lg transition-all">
@@ -807,7 +1181,7 @@ class DistributedTaskWorker {
             </div>
           )}
 
-          {/* Bottom Call Controls Dock (Google Meet signature style with Neobrutalism) */}
+          {/* Bottom Call Controls Dock */}
           <div className="mt-4 flex items-center justify-between rounded-2xl border-3 border-[#2e323b] bg-[#14161e]/90 p-2.5 backdrop-blur-md shadow-[4px_4px_0_#000000]">
             {/* Left meeting badge */}
             <div className="hidden lg:flex items-center gap-2 pl-2">
@@ -936,22 +1310,22 @@ class DistributedTaskWorker {
                     ? 'border-[#39d5c8] bg-[#39d5c8] text-black shadow-[2px_2px_0_#000]'
                     : 'border-[#2e323b] bg-[#222630] text-white hover:bg-[#2c3240]'
                 }`}
-                title="Open Shared Architecture Scratchpad"
+                title="Open Scratchpad"
               >
                 <Code2 className="h-4 w-4" />
               </button>
 
-              {/* Mentor Rubric / Scorecard Panel */}
+              {/* Mentor Rubric Evaluation Panel */}
               <button
                 onClick={() =>
                   setActiveSidePanel((prev) => (prev === 'rubric' ? null : 'rubric'))
                 }
                 className={`flex h-10 w-10 sm:h-11 sm:w-11 cursor-pointer items-center justify-center rounded-xl border-2 transition-all ${
                   activeSidePanel === 'rubric'
-                    ? 'border-[#ff57ce] bg-[#ff57ce] text-white shadow-[2px_2px_0_#000]'
+                    ? 'border-[#6d73ff] bg-[#6d73ff] text-white shadow-[2px_2px_0_#000]'
                     : 'border-[#2e323b] bg-[#222630] text-white hover:bg-[#2c3240]'
                 }`}
-                title="Mentorship Rubric & Evaluation"
+                title="Open Rubric Evaluation"
               >
                 <FileText className="h-4 w-4" />
               </button>
@@ -959,81 +1333,70 @@ class DistributedTaskWorker {
           </div>
         </div>
 
-        {/* Side Drawer Panel (Chat / Scratchpad / Rubric) */}
+        {/* Right Drawer / Side Panel (Chat / Scratchpad / Rubric) */}
         {activeSidePanel && (
-          <aside className="w-80 sm:w-96 shrink-0 border-l-2 border-[#1f232b] bg-[#14161d] flex flex-col justify-between overflow-hidden shadow-2xl transition-all">
-            {/* Panel Header */}
-            <div className="flex h-14 items-center justify-between border-b-2 border-[#1f232b] px-4">
+          <aside className="relative flex w-80 sm:w-96 flex-col border-l-2 border-[#1f232b] bg-[#14161e] p-4 text-white shadow-2xl z-20 animate-in slide-in-from-right duration-200">
+            {/* Side Panel Header */}
+            <div className="flex items-center justify-between border-b border-[#2e323b] pb-3">
               <div className="flex items-center gap-2">
-                {activeSidePanel === 'chat' && (
-                  <>
-                    <MessageSquare className="h-4 w-4 text-[#ffd84d]" />
-                    <h2 className="font-display text-base uppercase text-white">In-Call Chat</h2>
-                  </>
-                )}
-                {activeSidePanel === 'scratchpad' && (
-                  <>
-                    <Code2 className="h-4 w-4 text-[#39d5c8]" />
-                    <h2 className="font-display text-base uppercase text-white">Shared Scratchpad</h2>
-                  </>
-                )}
-                {activeSidePanel === 'rubric' && (
-                  <>
-                    <Trophy className="h-4 w-4 text-[#ff57ce]" />
-                    <h2 className="font-display text-base uppercase text-white">Mentor Evaluation</h2>
-                  </>
-                )}
+                {activeSidePanel === 'chat' && <MessageSquare className="h-4 w-4 text-[#ffd84d]" />}
+                {activeSidePanel === 'scratchpad' && <Code2 className="h-4 w-4 text-[#39d5c8]" />}
+                {activeSidePanel === 'rubric' && <FileText className="h-4 w-4 text-[#6d73ff]" />}
+                <h3 className="font-display text-base uppercase tracking-wider">
+                  {activeSidePanel === 'chat' && 'In-Call Chat'}
+                  {activeSidePanel === 'scratchpad' && 'Architecture Board'}
+                  {activeSidePanel === 'rubric' && 'Evaluation Rubric'}
+                </h3>
               </div>
 
               <button
                 onClick={() => setActiveSidePanel(null)}
-                className="cursor-pointer rounded-lg p-1.5 text-zinc-400 hover:bg-white/10 hover:text-white"
+                className="cursor-pointer rounded-lg p-1 text-zinc-400 hover:bg-[#222630] hover:text-white"
               >
                 ✕
               </button>
             </div>
 
-            {/* TAB 1: IN-CALL CHAT */}
+            {/* TAB CONTENT: CHAT */}
             {activeSidePanel === 'chat' && (
-              <div className="flex flex-1 flex-col justify-between overflow-hidden p-3">
+              <div className="flex flex-1 flex-col justify-between overflow-hidden pt-3">
                 <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-                  {chatMessages.map((msg) => {
-                    const isMe = msg.sender === myName
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
-                      >
-                        <div className="flex items-center gap-1.5 mb-1 text-[10px] text-zinc-400">
-                          <span className="font-bold text-zinc-300">{msg.sender}</span>
-                          <span className="text-zinc-500">· {msg.time}</span>
-                        </div>
-                        <div
-                          className={`max-w-[85%] rounded-xl border p-2.5 text-xs font-medium ${
-                            isMe
-                              ? 'border-[#2e323b] bg-[#ffd84d] text-black shadow-[2px_2px_0_#000]'
-                              : 'border-[#2e323b] bg-[#1f232b] text-zinc-200'
-                          }`}
-                        >
-                          {msg.text}
-                        </div>
+                  {chatMessages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`rounded-xl border p-3 text-xs ${
+                        msg.role === 'mentor'
+                          ? 'border-[#39d5c8]/30 bg-[#1c242c]'
+                          : 'border-[#2e323b] bg-[#1a1d24]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-white flex items-center gap-1.5">
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              msg.role === 'mentor' ? 'bg-[#39d5c8]' : 'bg-[#ffd84d]'
+                            }`}
+                          />
+                          {msg.sender}
+                        </span>
+                        <span className="text-[10px] text-zinc-400">{msg.time}</span>
                       </div>
-                    )
-                  })}
+                      <p className="text-zinc-200 leading-relaxed">{msg.text}</p>
+                    </div>
+                  ))}
                 </div>
 
-                {/* Chat Input */}
-                <form onSubmit={sendChatMessage} className="mt-3 flex gap-2">
+                <form onSubmit={sendChatMessage} className="mt-3 flex gap-2 pt-2 border-t border-[#2e323b]">
                   <input
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Type message..."
-                    className="flex-1 rounded-xl border border-[#2e323b] bg-[#0c0d11] px-3 py-2 text-xs font-bold text-white outline-none focus:border-[#ffd84d]"
+                    placeholder="Send a message to room..."
+                    className="flex-1 rounded-xl border border-[#2e323b] bg-[#1a1d24] px-3 py-2 text-xs text-white placeholder:text-zinc-500 outline-none focus:border-[#39d5c8]"
                   />
                   <button
                     type="submit"
-                    className="cursor-pointer flex h-9 w-9 items-center justify-center rounded-xl border border-black bg-[#ffd84d] text-black shadow-[1px_1px_0_#000] hover:brightness-105"
+                    className="cursor-pointer flex h-9 w-9 items-center justify-center rounded-xl bg-[#ffd84d] text-black hover:bg-[#ffe270] transition"
                   >
                     <Send className="h-4 w-4" />
                   </button>
@@ -1041,120 +1404,129 @@ class DistributedTaskWorker {
               </div>
             )}
 
-            {/* TAB 2: SHARED CODE & ARCHITECTURE SCRATCHPAD */}
+            {/* TAB CONTENT: ARCHITECTURE SCRATCHPAD */}
             {activeSidePanel === 'scratchpad' && (
-              <div className="flex flex-1 flex-col justify-between overflow-hidden p-3">
-                <div className="mb-2 text-[11px] font-bold text-zinc-400">
-                  Real-time synchronized editor. Code or diagram notes written here are visible to both participants.
+              <div className="flex flex-1 flex-col overflow-hidden pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-mono text-zinc-400">
+                    Live synchronized with room
+                  </span>
+                  <span className="rounded bg-[#39d5c8]/20 px-1.5 py-0.5 text-[9px] font-bold text-[#39d5c8]">
+                    Realtime Synced
+                  </span>
                 </div>
-
                 <textarea
                   value={scratchpadCode}
                   onChange={(e) => {
-                    setScratchpadCode(e.target.value)
+                    const newVal = e.target.value
+                    setScratchpadCode(newVal)
                     try {
                       const supabase = getSupabaseBrowserClient()
                       supabase.channel(`mentorship-room-${meetingId}`).send({
                         type: 'broadcast',
                         event: 'scratchpad-update',
-                        payload: { code: e.target.value },
+                        payload: { code: newVal },
                       })
                     } catch {
                       // ignore
                     }
                   }}
-                  rows={18}
-                  className="w-full flex-1 resize-none rounded-xl border-2 border-[#2e323b] bg-[#0c0d11] p-3 font-mono text-xs font-semibold text-emerald-400 outline-none focus:border-[#39d5c8]"
+                  className="flex-1 resize-none rounded-xl border border-[#2e323b] bg-[#0c0e12] p-3 font-mono text-xs text-[#39d5c8] outline-none focus:border-[#39d5c8]"
+                  spellCheck={false}
                 />
-
-                <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-400">
-                  <span>Language: TypeScript</span>
-                  <span className="text-emerald-400 font-bold">● Auto-syncing</span>
-                </div>
               </div>
             )}
 
-            {/* TAB 3: MENTOR RUBRIC & EVALUATION */}
+            {/* TAB CONTENT: RUBRIC */}
             {activeSidePanel === 'rubric' && (
-              <div className="flex flex-1 flex-col justify-between overflow-y-auto p-4 space-y-4">
+              <div className="flex flex-1 flex-col overflow-y-auto pt-3 space-y-4 pr-1">
                 <div>
-                  <div className="inline-flex items-center gap-1.5 rounded-md border border-[#2e323b] bg-[#ff57ce]/20 px-2.5 py-0.5 text-[10px] font-black uppercase text-[#ff57ce]">
-                    Round 2 Mentorship Scorecard
+                  <h4 className="text-xs font-black uppercase text-zinc-300 mb-1">
+                    Systems Architecture
+                  </h4>
+                  <div className="flex gap-2">
+                    {[1, 2, 3, 4, 5].map((score) => (
+                      <button
+                        key={score}
+                        onClick={() =>
+                          setRubricScores((prev) => ({ ...prev, architecture: score }))
+                        }
+                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition ${
+                          rubricScores.architecture === score
+                            ? 'border-[#6d73ff] bg-[#6d73ff] text-white'
+                            : 'border-[#2e323b] bg-[#1a1d24] text-zinc-400'
+                        }`}
+                      >
+                        {score}
+                      </button>
+                    ))}
                   </div>
-                  <h3 className="mt-2 font-display text-xl uppercase text-white">
-                    Candidate: Maya Chen
-                  </h3>
-                  <p className="text-xs text-zinc-400">
-                    Grade system architecture, distributed systems reasoning, and communication.
-                  </p>
-                </div>
-
-                <div className="space-y-3">
-                  {[
-                    { key: 'architecture', label: 'Systems Architecture', desc: 'Partitioning & consistency' },
-                    { key: 'concurrency', label: 'Concurrency & Locking', desc: 'Deadlock avoidance & leases' },
-                    { key: 'problemSolving', label: 'Problem Solving & Speed', desc: 'Debugging under live guidance' },
-                    { key: 'communication', label: 'Communication & Culture', desc: 'Clarity & receptiveness' },
-                  ].map((field) => (
-                    <div
-                      key={field.key}
-                      className="rounded-xl border border-[#2e323b] bg-[#1a1d24] p-3"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-black uppercase text-zinc-200">
-                          {field.label}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          {[1, 2, 3, 4, 5].map((star) => (
-                            <button
-                              key={star}
-                              type="button"
-                              onClick={() =>
-                                setRubricScores((prev) => ({
-                                  ...prev,
-                                  [field.key]: star,
-                                }))
-                              }
-                              className={`cursor-pointer text-sm ${
-                                star <= (rubricScores as any)[field.key]
-                                  ? 'text-[#ffd84d]'
-                                  : 'text-zinc-600'
-                              }`}
-                            >
-                              ★
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <p className="mt-0.5 text-[10px] text-zinc-400">{field.desc}</p>
-                    </div>
-                  ))}
                 </div>
 
                 <div>
-                  <label className="text-xs font-bold text-zinc-300 block mb-1">
-                    Mentorship Summary & Notes:
+                  <h4 className="text-xs font-black uppercase text-zinc-300 mb-1">
+                    Concurrency & State
+                  </h4>
+                  <div className="flex gap-2">
+                    {[1, 2, 3, 4, 5].map((score) => (
+                      <button
+                        key={score}
+                        onClick={() =>
+                          setRubricScores((prev) => ({ ...prev, concurrency: score }))
+                        }
+                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition ${
+                          rubricScores.concurrency === score
+                            ? 'border-[#6d73ff] bg-[#6d73ff] text-white'
+                            : 'border-[#2e323b] bg-[#1a1d24] text-zinc-400'
+                        }`}
+                      >
+                        {score}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs font-black uppercase text-zinc-300 mb-1">
+                    Communication & Trade-offs
+                  </h4>
+                  <div className="flex gap-2">
+                    {[1, 2, 3, 4, 5].map((score) => (
+                      <button
+                        key={score}
+                        onClick={() =>
+                          setRubricScores((prev) => ({ ...prev, communication: score }))
+                        }
+                        className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition ${
+                          rubricScores.communication === score
+                            ? 'border-[#6d73ff] bg-[#6d73ff] text-white'
+                            : 'border-[#2e323b] bg-[#1a1d24] text-zinc-400'
+                        }`}
+                      >
+                        {score}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-black uppercase text-zinc-300 mb-1 block">
+                    Mentor Feedback & Notes
                   </label>
                   <textarea
                     value={rubricNotes}
                     onChange={(e) => setRubricNotes(e.target.value)}
-                    rows={3}
-                    className="w-full resize-none rounded-xl border border-[#2e323b] bg-[#0c0d11] p-2.5 text-xs text-white outline-none focus:border-[#ffd84d]"
+                    rows={4}
+                    className="w-full rounded-xl border border-[#2e323b] bg-[#1a1d24] p-3 text-xs text-white outline-none focus:border-[#6d73ff]"
                   />
                 </div>
 
-                {rubricSubmitted ? (
-                  <div className="rounded-xl border border-emerald-500 bg-emerald-950/40 p-3 text-center text-xs font-bold text-emerald-300">
-                    ✓ Mentorship Evaluation Saved & Passed to Hiring Board!
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setRubricSubmitted(true)}
-                    className="cursor-pointer w-full rounded-xl border-2 border-black bg-[#39d5c8] py-2.5 text-xs font-black uppercase text-black shadow-[2px_2px_0_#000] hover:brightness-105"
-                  >
-                    Submit Round 2 Recommendation
-                  </button>
-                )}
+                <button
+                  onClick={() => setRubricSubmitted(true)}
+                  className="w-full py-2.5 rounded-xl bg-[#6d73ff] text-white font-black uppercase text-xs tracking-wider shadow-[2px_2px_0_#000] hover:bg-[#5d63f0] transition active:translate-y-0.5"
+                >
+                  {rubricSubmitted ? '✓ Evaluation Submitted' : 'Submit Mentor Evaluation'}
+                </button>
               </div>
             )}
           </aside>

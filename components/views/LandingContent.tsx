@@ -312,16 +312,16 @@ export function LandingContent() {
                 </svg>
               </div>
 
-              {/* Click Here Button (Recruiter Portal) */}
+              {/* Company & mentor sign-in (was the recruiter redirect) */}
               <button
-                onClick={() => setTab('recruiter')}
+                onClick={() => setTab('portal')}
                 className="group flex cursor-pointer items-center justify-center gap-2.5 rounded-2xl border-3 border-[#171717] bg-[#39d5c8] px-6 py-3 text-xs sm:text-sm font-black uppercase tracking-wider text-[#171717] shadow-hard transition-all hover:-translate-y-1 hover:bg-[#2dc4b7] hover:shadow-[7px_7px_0_#171717] active:translate-y-0 dark:border-[#2e323b] dark:bg-[#39d5c8] dark:shadow-[4px_4px_0_#000000]"
-                title="Open Recruiter & Mentor Portal"
+                title="Open the company & mentor portal"
               >
                 <div className="flex h-6 w-6 items-center justify-center rounded-lg border-2 border-[#171717] bg-white text-[#171717] shadow-xs transition-transform group-hover:rotate-12">
                   <Briefcase className="h-3.5 w-3.5" />
                 </div>
-                <span>Click Here for Recruiter Portal</span>
+                <span>Company &amp; Mentor Sign In</span>
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </button>
             </div>
@@ -710,11 +710,11 @@ export function LandingContent() {
 
           <div className="flex items-center gap-4 text-xs font-black uppercase text-white/90">
             <button
-              onClick={() => setTab('recruiter')}
+              onClick={() => setTab('portal')}
               className="cursor-pointer hover:underline text-[#39d5c8] flex items-center gap-1.5"
             >
               <Briefcase className="h-3.5 w-3.5" />
-              <span>Recruiter & Mentor Portal</span>
+              <span>Company &amp; Mentor Sign In</span>
             </button>
             <span className="text-white/30">•</span>
             <button

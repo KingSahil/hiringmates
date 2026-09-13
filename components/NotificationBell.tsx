@@ -1,9 +1,11 @@
 'use client'
 
 import React, { useState, useRef, useEffect } from 'react'
-import { Bell, Video, CheckCircle2, UserCheck, Shield, Sparkles, X, ChevronRight, Radio, ExternalLink } from 'lucide-react'
+import { Bell, Video, CheckCircle2, UserCheck, Shield, X, Radio, ExternalLink } from 'lucide-react'
 import { useNotifications, UserRole } from '@/lib/notifications'
 import { useNavigation } from '@/lib/navigation'
+import { useAuth } from '@/lib/auth'
+import { isMentor } from '@/lib/portal'
 
 export function NotificationBell() {
   const [isOpen, setIsOpen] = useState(false)
@@ -15,10 +17,12 @@ export function NotificationBell() {
     unreadCount,
     markAsRead,
     markAllAsRead,
-    triggerRound2Notification,
-    deleteNotification,
+    joinMeeting,
   } = useNotifications()
   const { setTab } = useNavigation()
+  const { user, isAuthorized } = useAuth()
+  const isUserMentor = isMentor(user?.email)
+  const isStudentWorkflow = isAuthorized && !isUserMentor
 
   // Close when clicking outside
   useEffect(() => {
@@ -41,7 +45,12 @@ export function NotificationBell() {
   const handleJoinCall = (notifId: string) => {
     markAsRead(notifId)
     setIsOpen(false)
+    // Switch tab first — setTab rewrites the path — then stamp the room id on
+    // the URL so the mentorship view opens THIS mentor's private room rather
+    // than a shared default.
     setTab('mentorship')
+    const notif = notifications.find((n) => n.id === notifId)
+    if (notif?.meetingId) joinMeeting(notif.meetingId)
   }
 
   return (
@@ -106,39 +115,41 @@ export function NotificationBell() {
             </div>
           </div>
 
-          {/* Perspective / Role Switcher Tabs (Candidate vs Mentor) */}
-          <div className="mt-3 rounded-xl border-2 border-[#171717] bg-white p-1 dark:border-[#2e323b] dark:bg-[#0c0d11]">
-            <div className="mb-1 px-2 pt-1 text-[9px] font-black uppercase tracking-wider text-[#171717]/60 dark:text-zinc-400 flex items-center justify-between">
-              <span>View As Role:</span>
-              <span className="text-emerald-600 dark:text-emerald-400 font-bold lowercase">
-                synced with platform
-              </span>
+          {/* Perspective / Role Switcher Tabs (Candidate vs Mentor) — hidden in student-authorized workflow */}
+          {!isStudentWorkflow && (
+            <div className="mt-3 rounded-xl border-2 border-[#171717] bg-white p-1 dark:border-[#2e323b] dark:bg-[#0c0d11]">
+              <div className="mb-1 px-2 pt-1 text-[9px] font-black uppercase tracking-wider text-[#171717]/60 dark:text-zinc-400 flex items-center justify-between">
+                <span>View As Role:</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold lowercase">
+                  synced with platform
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  onClick={() => setActiveRole('candidate')}
+                  className={`cursor-pointer flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-black uppercase transition-all ${
+                    activeRole === 'candidate'
+                      ? 'border border-[#171717] bg-[#ffd84d] text-[#171717] shadow-[2px_2px_0_#171717] dark:border-black'
+                      : 'text-[#171717]/70 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900'
+                  }`}
+                >
+                  <UserCheck className="h-3.5 w-3.5" />
+                  Candidate
+                </button>
+                <button
+                  onClick={() => setActiveRole('mentor')}
+                  className={`cursor-pointer flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-black uppercase transition-all ${
+                    activeRole === 'mentor'
+                      ? 'border border-[#171717] bg-[#39d5c8] text-[#171717] shadow-[2px_2px_0_#171717] dark:border-black'
+                      : 'text-[#171717]/70 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900'
+                  }`}
+                >
+                  <Shield className="h-3.5 w-3.5" />
+                  Mentor
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-1">
-              <button
-                onClick={() => setActiveRole('candidate')}
-                className={`cursor-pointer flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-black uppercase transition-all ${
-                  activeRole === 'candidate'
-                    ? 'border border-[#171717] bg-[#ffd84d] text-[#171717] shadow-[2px_2px_0_#171717] dark:border-black'
-                    : 'text-[#171717]/70 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900'
-                }`}
-              >
-                <UserCheck className="h-3.5 w-3.5" />
-                Candidate
-              </button>
-              <button
-                onClick={() => setActiveRole('mentor')}
-                className={`cursor-pointer flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-black uppercase transition-all ${
-                  activeRole === 'mentor'
-                    ? 'border border-[#171717] bg-[#39d5c8] text-[#171717] shadow-[2px_2px_0_#171717] dark:border-black'
-                    : 'text-[#171717]/70 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900'
-                }`}
-              >
-                <Shield className="h-3.5 w-3.5" />
-                Mentor
-              </button>
-            </div>
-          </div>
+          )}
 
           {/* Notifications List */}
           <div className="mt-3 max-h-[360px] space-y-2.5 overflow-y-auto pr-1">
@@ -194,14 +205,14 @@ export function NotificationBell() {
                     </div>
 
                     {/* Round 2 Call Meta Pill */}
-                    {isRound2 && (
+                    {Boolean(notif.meetingId) && (
                       <div className="mt-2.5 flex items-center justify-between rounded-lg border border-[#171717]/20 bg-[#fffaf0] px-2.5 py-1.5 text-[10px] font-bold text-[#171717] dark:border-zinc-700 dark:bg-[#15171c] dark:text-zinc-300">
                         <div className="flex items-center gap-1.5">
                           <Radio className="h-3 w-3 text-emerald-500 animate-pulse" />
                           <span>
                             {activeRole === 'candidate'
-                              ? `Mentor: ${notif.mentorName}`
-                              : `Candidate: ${notif.candidateName}`}
+                              ? `Mentor: ${notif.mentorName || notif.senderName}`
+                              : `Candidate: ${notif.candidateName || 'Student'}`}
                           </span>
                         </div>
                         <span className="font-mono text-[9px] text-[#171717]/50 dark:text-zinc-500">
@@ -212,14 +223,16 @@ export function NotificationBell() {
 
                     {/* Action Buttons */}
                     <div className="mt-3 flex items-center gap-2">
-                      {isRound2 && (
+                      {Boolean(notif.meetingId) && (
                         <button
                           onClick={() => handleJoinCall(notif.id)}
                           className="cursor-pointer flex flex-1 items-center justify-center gap-1.5 rounded-lg border-2 border-[#171717] bg-[#ffd84d] py-2 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:brightness-105 active:translate-y-0.5 dark:border-black dark:shadow-[2px_2px_0_#000000]"
                         >
                           <Video className="h-3.5 w-3.5 fill-current" />
                           <span>
-                            {activeRole === 'candidate' ? 'Join Mentorship Call' : 'Start Host Call'}
+                            {activeRole === 'candidate'
+                              ? 'Join Mentorship Call'
+                              : 'Enter Meeting Room'}
                           </span>
                         </button>
                       )}
@@ -236,29 +249,6 @@ export function NotificationBell() {
                 )
               })
             )}
-          </div>
-
-          {/* Footer with Quick Test Action */}
-          <div className="mt-3 flex items-center justify-between border-t border-[#171717]/15 pt-2.5 text-xs dark:border-[#2e323b]">
-            <button
-              onClick={() => triggerRound2Notification(activeRole)}
-              className="cursor-pointer flex items-center gap-1 text-[11px] font-black uppercase text-[#6d73ff] hover:underline dark:text-[#a0a5ff]"
-              title="Send a simulated Round 2 invite"
-            >
-              <Sparkles className="h-3 w-3" />
-              <span>Simulate New Invite</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setIsOpen(false)
-                setTab('mentorship')
-              }}
-              className="cursor-pointer flex items-center gap-1 text-[11px] font-black uppercase text-[#171717]/70 hover:text-[#171717] hover:underline dark:text-zinc-400 dark:hover:text-white"
-            >
-              <span>Direct Room</span>
-              <ChevronRight className="h-3 w-3" />
-            </button>
           </div>
         </div>
       )}

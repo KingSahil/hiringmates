@@ -10,6 +10,9 @@ import { CodeMatesContent } from '@/components/views/CodeMatesContent'
 import { MentorshipMeetContent } from '@/components/views/MentorshipMeetContent'
 import { AssessmentContent } from '@/components/views/AssessmentContent'
 import { RecruiterPortal } from '@/components/views/RecruiterPortal'
+import { PortalContent } from '@/components/views/PortalContent'
+import { PositionsContent } from '@/components/views/PositionsContent'
+import { portalRoleFor } from '@/lib/portal'
 
 interface AppShellProps {
   initialTab?: AppTab
@@ -17,8 +20,38 @@ interface AppShellProps {
 
 export function AppShell({ initialTab }: AppShellProps) {
   const { tab, setTab } = useNavigation()
-  const { isAuthorized, loading } = useAuth()
+  const { isAuthorized, loading, user } = useAuth()
   const autoCheckRef = useRef(false)
+  const portalRedirectRef = useRef(false)
+  const wasAuthorizedRef = useRef<boolean | null>(null)
+
+  // Redirect to unauthorized home page whenever ANY account logs out anytime
+  useEffect(() => {
+    if (loading) return
+    if (wasAuthorizedRef.current === null) {
+      wasAuthorizedRef.current = isAuthorized
+      return
+    }
+    if (wasAuthorizedRef.current && !isAuthorized) {
+      wasAuthorizedRef.current = false
+      setTab('home')
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+        window.location.replace('/')
+      }
+    }
+    wasAuthorizedRef.current = isAuthorized
+  }, [isAuthorized, loading, setTab])
+
+  // Company and mentor accounts land straight on their dashboard instead of
+  // the student home. Fires once per mount, so they can still navigate back to
+  // the home page afterwards without being bounced.
+  const portalRole = portalRoleFor(user?.email)
+  useEffect(() => {
+    if (loading || !isAuthorized || !portalRole) return
+    if (portalRedirectRef.current) return
+    portalRedirectRef.current = true
+    if (tab === 'home') setTab('portal')
+  }, [loading, isAuthorized, portalRole, tab, setTab])
 
   // First sign-in for an account that has never been registered: start the
   // profiling pipeline and drop the candidate straight into the assessment.
@@ -26,7 +59,7 @@ export function AppShell({ initialTab }: AppShellProps) {
   // Fires at most once per mount. The endpoint is idempotent, so even a
   // duplicate call (refresh, second tab) returns "existing" and starts nothing.
   useEffect(() => {
-    if (loading || !isAuthorized || autoCheckRef.current) return
+    if (loading || !isAuthorized || autoCheckRef.current || portalRole) return
     autoCheckRef.current = true
 
     ;(async () => {
@@ -34,9 +67,14 @@ export function AppShell({ initialTab }: AppShellProps) {
         const res = await fetch('/api/onboarding/auto', { method: 'POST' })
         if (!res.ok) return
         const data = await res.json()
-        // Only interrupt someone sitting on the landing page. If they have
-        // already navigated elsewhere, leave them there — the assessment view
-        // adopts the running session whenever they open it.
+
+        // If cache already exists for this GitHub account (30-day TTL) or candidate is already profiled,
+        // NEVER redirect to assessment! They stay on home.
+        if (data?.hasCache || data?.status === 'cached' || data?.status === 'portal_member') {
+          return
+        }
+
+        // Only redirect to assessment if this is a brand-new candidate session freshly started
         if (data?.status === 'new' && tab === 'home') {
           setTab('assessment')
         }
@@ -44,9 +82,8 @@ export function AppShell({ initialTab }: AppShellProps) {
         // Auto-start is best effort; the manual start control still works.
       }
     })()
-  }, [loading, isAuthorized, tab, setTab])
+  }, [loading, isAuthorized, portalRole, tab, setTab])
 
-  // Sync initial tab with current URL route
   useEffect(() => {
     if (initialTab && tab !== initialTab) {
       const currentPath = window.location.pathname.toLowerCase()
@@ -56,70 +93,30 @@ export function AppShell({ initialTab }: AppShellProps) {
         (initialTab === 'mentorship' && currentPath.includes('mentorship')) ||
         (initialTab === 'assessment' && currentPath.includes('assessment')) ||
         (initialTab === 'recruiter' && currentPath.includes('recruiter')) ||
+        (initialTab === 'positions' && currentPath.includes('positions')) ||
+        (initialTab === 'portal' && currentPath.includes('portal')) ||
         (initialTab === 'home' && currentPath === '/')
       ) {
-        if (!loading && !isAuthorized && initialTab !== 'home' && initialTab !== 'recruiter') {
-          setTab('home')
-          if (typeof window !== 'undefined') {
-            window.history.replaceState(null, '', '/')
-          }
-        } else {
-          setTab(initialTab)
-        }
+        setTab(initialTab)
       }
     }
-  }, [initialTab, setTab, tab, loading, isAuthorized])
+  }, [initialTab, setTab, tab])
 
-  // If unauthorized and sitting on any protected tab, automatically reset to home
-  useEffect(() => {
-    if (!loading && !isAuthorized && tab !== 'home' && tab !== 'recruiter') {
-      setTab('home')
-      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
-        window.history.replaceState(null, '', '/')
-      }
-    }
-  }, [loading, isAuthorized, tab, setTab])
-
-  const currentTab = initialTab && tab === 'home' ? initialTab : tab
-  const isProtectedTab =
-    currentTab === 'hireme' ||
-    currentTab === 'codemates' ||
-    currentTab === 'mentorship' ||
-    currentTab === 'assessment'
-
-  // While auth session is resolving, show branded loader if attempting to access protected content
-  if (loading && isProtectedTab) {
-    return (
-      <main className="flex min-h-[calc(100vh-65px)] items-center justify-center bg-[#fffaf0] dark:bg-[#0c0d11]">
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border-3 border-[#171717] bg-[#ffd84d] shadow-[3px_3px_0_#171717] animate-pulse dark:border-[#2e323b] dark:shadow-[3px_3px_0_#000000]">
-            <img src="/brand-logo.png" alt="HiringMates" className="h-6 w-6 object-contain" />
-          </div>
-          <p className="font-mono text-xs font-black uppercase tracking-wider text-[#171717] dark:text-[#f4f4f7]">
-            Verifying credentials...
-          </p>
-        </div>
-      </main>
-    )
-  }
-
-  // If not logged in and not accessing recruiter portal, strictly render the Landing page
-  if (!isAuthorized && currentTab !== 'recruiter') {
-    return (
-      <main className="w-full">
-        <LandingContent />
-      </main>
-    )
-  }
+  const isRootPath = typeof window !== 'undefined' && window.location.pathname === '/'
+  const currentTab = isRootPath ? 'home' : (initialTab && tab === 'home' ? initialTab : tab)
 
   return (
     <main className="w-full">
-      {currentTab === 'home' && <AuthorizedHome />}
+      {currentTab === 'home' && (
+        isAuthorized ? <AuthorizedHome /> : <LandingContent />
+      )}
       {currentTab === 'hireme' && <HireMeContent />}
       {currentTab === 'codemates' && <CodeMatesContent />}
       {currentTab === 'mentorship' && <MentorshipMeetContent />}
       {currentTab === 'assessment' && <AssessmentContent />}
       {currentTab === 'recruiter' && <RecruiterPortal />}
+      {currentTab === 'positions' && <PositionsContent />}
+      {currentTab === 'portal' && <PortalContent />}
     </main>
   )
 }

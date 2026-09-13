@@ -27,10 +27,10 @@ import logging
 import threading
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from rag.config import load_settings
-from rag.llm import LLMClient, build_llm
+from rag.llm import LLMClient, LLMError, build_llm
 from rag.models import Answer, Identity, PlagiarismCheckRequest
 from rag.pipeline import Pipeline, SubprocessDetector
 from rag.plagiarism import CopyDetectEngine
@@ -49,6 +49,18 @@ class CreateSessionRequest(BaseModel):
 
 class AnswersRequest(BaseModel):
     answers: list[Answer]
+
+
+class PositionQuestionsRequest(BaseModel):
+    role: str
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    mcq_count: int | None = None
+    theory_count: int | None = None
+    # Internal use only: the Next.js server needs the answer key to grade an
+    # attempt. It stores it server-side and never forwards it to the browser.
+    # Never expose this flag to a client-facing caller.
+    include_answers: bool = False
 
 
 def _store(settings) -> Store:
@@ -185,6 +197,40 @@ def check_plagiarism(request: PlagiarismCheckRequest) -> dict:
     engine = CopyDetectEngine()
     result = engine.analyze(request, llm=pipeline.llm if request.run_llm else None)
     return result.model_dump(mode="json")
+
+
+@app.post("/positions/questions")
+def generate_position_questions(request: PositionQuestionsRequest) -> dict:
+    """
+    Screening questions for a company position.
+
+    Independent of any candidate, so one position can serve a fresh set to
+    every student who attempts it. `correct_index` is stripped before the
+    questions leave the server — grading happens here, not in the browser.
+    """
+    if not request.role.strip():
+        raise HTTPException(status_code=400, detail="role is required")
+
+    pipeline = _pipeline()
+    try:
+        questions = pipeline.generate_position_questions(
+            role=request.role,
+            description=request.description,
+            tags=request.tags,
+            mcq_count=request.mcq_count,
+            theory_count=request.theory_count,
+        )
+    except LLMError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    payload = []
+    for q in questions:
+        data = q.model_dump(mode="json")
+        if not request.include_answers:
+            data.pop("correct_index", None)
+        payload.append(data)
+
+    return {"questions": payload}
 
 
 def _advance_safely(pipeline: Pipeline, session_id: str) -> None:

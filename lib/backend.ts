@@ -44,18 +44,31 @@ export function buildIdentity(
   const github = find('github')
   const google = find('google')
 
-  const githubEmail: string = github?.identity_data?.email ?? github?.email ?? ''
+  const githubEmail: string =
+    github?.identity_data?.email ??
+    github?.email ??
+    user?.user_metadata?.email ??
+    user?.email ??
+    ''
   const googleEmail: string =
-    google?.identity_data?.email ?? google?.email ?? user?.email ?? ''
+    google?.identity_data?.email ??
+    google?.email ??
+    user?.email ??
+    ''
+
+  const githubHandle: string =
+    github?.identity_data?.user_name ??
+    github?.identity_data?.preferred_username ??
+    user?.user_metadata?.user_name ??
+    user?.user_metadata?.preferred_username ??
+    user?.user_metadata?.name ??
+    ''
 
   const identity: BackendIdentity = {
     user_id: user?.id ?? '',
     github_email: githubEmail,
     google_email: googleEmail,
-    github_handle:
-      github?.identity_data?.user_name ??
-      github?.identity_data?.preferred_username ??
-      '',
+    github_handle: githubHandle,
     // Only present for the provider used in this session, and not persisted
     // across sessions by Supabase.
     provider_token: session?.provider_token ?? null,

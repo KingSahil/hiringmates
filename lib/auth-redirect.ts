@@ -1,16 +1,25 @@
 /**
  * Centralized utility for resolving the absolute URL for Supabase Auth redirects.
- * Redirects OAuth to the production site https://hiringmates.vercel.app.
+ * Handles local development, Vercel preview environments, and production domains.
  */
 export function getAuthRedirectUrl(path: string = '/auth/callback'): string {
   const cleanPath = path.startsWith('/') ? path : `/${path}`
 
-  // Default to production site https://hiringmates.vercel.app
-  const productionBase = 'https://hiringmates.vercel.app'
-  const base = process.env.NEXT_PUBLIC_SITE_URL || productionBase
+  // 1. In browser, dynamically use the current active origin (e.g. https://hiringmates.vercel.app)
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${cleanPath}`
+  }
 
-  const normalizedBase =
-    base.startsWith('http://') || base.startsWith('https://') ? base : `https://${base}`
+  // 2. Server-side / fallback from environment variables
+  let base =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL ||
+    (process.env.NEXT_PUBLIC_VERCEL_URL ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}` : null) ||
+    'https://hiringmates.vercel.app'
 
-  return `${normalizedBase.replace(/\/+$/, '')}${cleanPath}`
+  if (!base.startsWith('http://') && !base.startsWith('https://')) {
+    base = `https://${base}`
+  }
+
+  return `${base.replace(/\/+$/, '')}${cleanPath}`
 }

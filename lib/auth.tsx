@@ -35,50 +35,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState<boolean>(true)
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
 
+  const hadUserRef = React.useRef<boolean>(false)
+
+  const redirectToUnauthorizedHome = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.location.replace('/')
+    }
+  }, [])
+
   useEffect(() => {
     const supabase = getSupabaseBrowserClient()
-
-    // 1. If code parameter is in URL, handle it appropriately
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search)
-      const code = params.get('code')
-      if (code) {
-        // If landed on localhost with an OAuth code, immediately forward to the production site
-        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-          window.location.href = `https://hiringmates.vercel.app/auth/callback?code=${encodeURIComponent(code)}`
-          return
-        } else {
-          // If landed directly on root of production with a code, exchange it for session
-          supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
-            if (!error && data?.session) {
-              setSession(data.session)
-              setUser(data.session.user)
-              const cleanUrl = window.location.pathname + (window.location.hash || '')
-              window.history.replaceState({}, '', cleanUrl)
-            }
-          })
-        }
-      }
-    }
 
     // Get initial session
     supabase.auth.getSession().then(({ data }: any) => {
       setSession(data.session)
-      setUser(data.session?.user ?? null)
+      const currentUser = data.session?.user ?? null
+      setUser(currentUser)
+      hadUserRef.current = !!currentUser
       setLoading(false)
     })
 
     // Listen to auth changes
-    const { data: listener } = supabase.auth.onAuthStateChange((_event: any, newSession: any) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event: any, newSession: any) => {
+      const newUser = newSession?.user ?? null
       setSession(newSession)
-      setUser(newSession?.user ?? null)
+      setUser(newUser)
       setLoading(false)
+
+      // When ANY account logs out anytime (explicit logout, cross-tab, token expiration)
+      if (event === 'SIGNED_OUT' || (hadUserRef.current && !newUser)) {
+        hadUserRef.current = false
+        setIsSettingsOpen(false)
+        redirectToUnauthorizedHome()
+      } else if (newUser) {
+        hadUserRef.current = true
+      }
     })
 
     return () => {
       listener.subscription.unsubscribe()
     }
-  }, [])
+  }, [redirectToUnauthorizedHome])
 
   const signInWithGithub = useCallback(async () => {
     const supabase = getSupabaseBrowserClient()
@@ -102,10 +99,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     const supabase = getSupabaseBrowserClient()
-    await supabase.auth.signOut()
-    setUser(null)
-    setSession(null)
-  }, [])
+    hadUserRef.current = false
+    setIsSettingsOpen(false)
+    try {
+      await supabase.auth.signOut()
+    } catch (err) {
+      console.error('Sign out error:', err)
+    } finally {
+      setUser(null)
+      setSession(null)
+      redirectToUnauthorizedHome()
+    }
+  }, [redirectToUnauthorizedHome])
 
   return (
     <AuthContext.Provider

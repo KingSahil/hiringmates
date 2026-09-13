@@ -16,9 +16,10 @@ export function AuthorizedHome() {
       onMouseLeave={() => setHovered(null)}
       className="w-full min-h-[calc(100vh-65px)] grid grid-cols-1 md:grid-cols-2 m-0 p-0 select-none overflow-hidden"
     >
-      {/* 01 HIRE ME PANEL (Touches extreme left edge) */}
+      {/* 01 HIRE ME PANEL -> opens the position marketplace, where every
+          company card/badge is listed and the student can apply. */}
       <section
-        onClick={() => setTab('hireme')}
+        onClick={() => setTab('positions')}
         onMouseEnter={() => setHovered('hireme')}
         onMouseLeave={() => setHovered(null)}
         className={`group relative flex min-h-[420px] md:min-h-full cursor-pointer flex-col justify-between border-b-4 md:border-b-0 md:border-r-4 border-[#171717] bg-[#39d5c8] p-8 sm:p-12 lg:p-16 xl:p-20 text-[#171717] dark:border-[#000000] overflow-hidden transition-all duration-500 ease-in-out ${

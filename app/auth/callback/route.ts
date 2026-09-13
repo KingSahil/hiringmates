@@ -17,12 +17,11 @@ export async function GET(request: Request) {
   const forwardedHost = request.headers.get('x-forwarded-host')
   const forwardedProto = request.headers.get('x-forwarded-proto') || 'https'
 
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, '') || 'https://hiringmates.vercel.app'
-  let redirectBase = siteUrl
+  let redirectBase = origin
   if (forwardedHost) {
     redirectBase = `${forwardedProto}://${forwardedHost}`
-  } else if (origin && (origin.includes('hiringmates.vercel.app') || origin.includes('vercel.app'))) {
-    redirectBase = origin
+  } else if (process.env.NEXT_PUBLIC_SITE_URL) {
+    redirectBase = process.env.NEXT_PUBLIC_SITE_URL.replace(/\/+$/, '')
   }
 
   if (error || errorDescription) {

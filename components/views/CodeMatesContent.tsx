@@ -82,7 +82,6 @@ export function CodeMatesContent() {
   const { setTab } = useNavigation()
   const [view, setView] = useState<CodeMatesView>('rooms')
   const [rooms, setRooms] = useState<Room[]>([])
-  const [isLoadingRooms, setIsLoadingRooms] = useState(true)
   const [activeRoom, setActiveRoom] = useState<Room | null>(null)
   const [roomCodeInput, setRoomCodeInput] = useState('')
   const [newRoomTitle, setNewRoomTitle] = useState('Async Systems Race')
@@ -266,42 +265,35 @@ export async function processNext(workerFn) {
   // hardcoded demo rooms are gone — an empty list now means "you have none",
   // not "fall back to fakes".
   const loadRooms = async () => {
-    setIsLoadingRooms(true)
-    try {
-      const supabase = getSupabaseBrowserClient()
-      const { data: { user } } = await supabase.auth.getUser()
+    const supabase = getSupabaseBrowserClient()
+    const { data: { user } } = await supabase.auth.getUser()
 
-      if (!user) {
-        setRooms([])
-        return
-      }
-
-      const { data: memberships } = await supabase
-        .from('room_members')
-        .select('room_id')
-        .eq('user_id', user.id)
-
-      const joinedIds = (memberships ?? [])
-        .map((m: any) => m.room_id)
-        .filter(Boolean)
-
-      // PostgREST OR syntax: host of the room, or a member of it.
-      const scope = joinedIds.length
-        ? `host_id.eq.${user.id},id.in.(${joinedIds.join(',')})`
-        : `host_id.eq.${user.id}`
-
-      const { data, error } = await supabase
-        .from('rooms')
-        .select('id,code,title,status,host_id')
-        .or(scope)
-        .order('created_at', { ascending: false })
-
-      setRooms(error ? [] : ((data ?? []) as Room[]))
-    } catch {
+    if (!user) {
       setRooms([])
-    } finally {
-      setIsLoadingRooms(false)
+      return
     }
+
+    const { data: memberships } = await supabase
+      .from('room_members')
+      .select('room_id')
+      .eq('user_id', user.id)
+
+    const joinedIds = (memberships ?? [])
+      .map((m: any) => m.room_id)
+      .filter(Boolean)
+
+    // PostgREST OR syntax: host of the room, or a member of it.
+    const scope = joinedIds.length
+      ? `host_id.eq.${user.id},id.in.(${joinedIds.join(',')})`
+      : `host_id.eq.${user.id}`
+
+    const { data, error } = await supabase
+      .from('rooms')
+      .select('id,code,title,status,host_id')
+      .or(scope)
+      .order('created_at', { ascending: false })
+
+    setRooms(error ? [] : ((data ?? []) as Room[]))
   }
 
   useEffect(() => {
@@ -1097,88 +1089,45 @@ export async function processNext(workerFn) {
 
             {/* Rooms list */}
             <div>
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="font-display text-2xl uppercase tracking-tight text-[#171717] dark:text-[#f4f4f7]">
-                  Available Rooms
-                </h2>
-                {isLoadingRooms && (
-                  <span className="flex items-center gap-1.5 font-mono text-xs font-bold text-[#171717]/60 dark:text-[#a1a1aa]">
-                    <span className="h-2 w-2 rounded-full bg-[#6d73ff] animate-ping" />
-                    Loading rooms...
-                  </span>
-                )}
+              <h2 className="mb-4 font-display text-2xl uppercase tracking-tight text-[#171717] dark:text-[#f4f4f7]">
+                Available Rooms
+              </h2>
+              <div className="grid gap-4 md:grid-cols-3">
+                {rooms.map((r) => (
+                  <div
+                    key={r.id}
+                    className="flex flex-col justify-between rounded-2xl border-2 border-[#171717] bg-white p-5 shadow-hard transition-all hover:-translate-y-1 dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[5px_5px_0_#000000]"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="rounded border border-[#171717] bg-[#ffd84d] px-2 py-0.5 font-mono text-[10px] font-black text-[#171717] dark:border-[#000000]">
+                          {r.code}
+                        </span>
+                        <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                          Open
+                        </span>
+                      </div>
+                      <h3 className="mt-3 font-display text-xl uppercase text-[#171717] dark:text-[#f4f4f7]">
+                        {r.title}
+                      </h3>
+                      <p className="mt-1 text-xs text-[#171717]/60 dark:text-[#a1a1aa]">
+                        Shared challenge · Click to enter lobby and sync code.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setActiveRoom(r)
+                        setView('lobby')
+                      }}
+                      className="btn-neo btn-neo-iris mt-4 w-full py-2 text-xs"
+                    >
+                      Enter Lobby <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
               </div>
-
-              {isLoadingRooms ? (
-                <div className="grid gap-4 md:grid-cols-3">
-                  {[1, 2, 3].map((i) => (
-                    <div
-                      key={i}
-                      className="flex flex-col justify-between rounded-2xl border-2 border-[#171717]/30 bg-white/70 p-5 shadow-hard animate-pulse dark:border-[#2e323b] dark:bg-[#15171c]/70 dark:shadow-[5px_5px_0_#000000]"
-                    >
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <div className="h-5 w-16 rounded border border-[#171717]/20 bg-[#ffd84d]/50 dark:border-[#2e323b] dark:bg-[#ffd84d]/20" />
-                          <div className="flex items-center gap-1.5">
-                            <div className="h-2 w-2 rounded-full bg-emerald-500/50 animate-pulse" />
-                            <div className="h-3 w-8 rounded bg-[#171717]/15 dark:bg-white/15" />
-                          </div>
-                        </div>
-                        <div className="mt-3.5 space-y-2">
-                          <div className="h-6 w-3/4 rounded-lg bg-[#171717]/15 dark:bg-white/15" />
-                          <div className="h-3.5 w-full rounded bg-[#171717]/10 dark:bg-white/10" />
-                          <div className="h-3.5 w-4/5 rounded bg-[#171717]/10 dark:bg-white/10" />
-                        </div>
-                      </div>
-
-                      <div className="mt-6 h-9 w-full rounded-xl border-2 border-[#171717]/20 bg-[#6d73ff]/20 dark:border-[#2e323b] dark:bg-[#6d73ff]/20" />
-                    </div>
-                  ))}
-                </div>
-              ) : rooms.length > 0 ? (
-                <div className="grid gap-4 md:grid-cols-3">
-                  {rooms.map((r) => (
-                    <div
-                      key={r.id}
-                      className="flex flex-col justify-between rounded-2xl border-2 border-[#171717] bg-white p-5 shadow-hard transition-all hover:-translate-y-1 dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[5px_5px_0_#000000]"
-                    >
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="rounded border border-[#171717] bg-[#ffd84d] px-2 py-0.5 font-mono text-[10px] font-black text-[#171717] dark:border-[#000000]">
-                            {r.code}
-                          </span>
-                          <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
-                            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                            Open
-                          </span>
-                        </div>
-                        <h3 className="mt-3 font-display text-xl uppercase text-[#171717] dark:text-[#f4f4f7]">
-                          {r.title}
-                        </h3>
-                        <p className="mt-1 text-xs text-[#171717]/60 dark:text-[#a1a1aa]">
-                          Shared challenge · Click to enter lobby and sync code.
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          setActiveRoom(r)
-                          setView('lobby')
-                        }}
-                        className="btn-neo btn-neo-iris mt-4 w-full py-2 text-xs"
-                      >
-                        Enter Lobby <ArrowRight className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-2xl border-2 border-dashed border-[#171717]/30 bg-white/40 p-8 text-center dark:border-[#2e323b] dark:bg-[#15171c]/30">
-                  <p className="font-mono text-xs font-bold uppercase text-[#171717]/60 dark:text-[#a1a1aa]">
-                    No active rooms found. Host a new challenge or enter a room code above to start!
-                  </p>
-                </div>
-              )}
             </div>
 
             {/* Create Room Modal */}

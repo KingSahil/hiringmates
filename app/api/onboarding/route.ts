@@ -31,7 +31,11 @@ function backendFailure(error: unknown) {
   )
 }
 
-export async function POST() {
+export async function POST(request?: Request) {
+  let body: any = {}
+  if (request) {
+    body = await request.json().catch(() => ({}))
+  }
   const { user } = await currentUser()
   if (!user) {
     return NextResponse.json(
@@ -44,13 +48,27 @@ export async function POST() {
   const { data: sessionData } = await supabase.auth.getSession()
   const { identity, missing } = buildIdentity(user, sessionData?.session)
 
-  if (missing.length > 0) {
+  if (body?.github_handle) {
+    identity.github_handle = String(body.github_handle)
+      .replace(/^https?:\/\/github\.com\//, '')
+      .replace(/\/+$/, '')
+  }
+  if (!identity.github_email && user?.email) {
+    identity.github_email = user.email
+  }
+
+  const effectiveMissing: string[] = []
+  if (!identity.user_id) effectiveMissing.push('user id')
+  if (!identity.github_email) effectiveMissing.push('GitHub account (email)')
+  if (!identity.github_handle) effectiveMissing.push('GitHub handle')
+
+  if (effectiveMissing.length > 0) {
     return NextResponse.json(
       {
         error: 'incomplete_identity',
         message:
-          'Onboarding needs both a GitHub and a Google account linked. The extraction cache is keyed on both emails.',
-        missing,
+          'Onboarding needs a GitHub account or handle to analyze. Please provide your GitHub profile.',
+        missing: effectiveMissing,
       },
       { status: 400 },
     )

@@ -39,7 +39,12 @@ from rag.models import (
     SkillTag,
     utcnow,
 )
-from rag.scenarios import DEFAULT_SCENARIO, Scenario, get_scenario
+from rag.scenarios import (
+    DEFAULT_SCENARIO,
+    POSITION_SCREENING,
+    Scenario,
+    get_scenario,
+)
 from rag.store import Store
 
 logger = logging.getLogger("rag.pipeline")
@@ -265,6 +270,44 @@ class Pipeline:
         session.question_set = QuestionSet(questions=valid)
         session.served_at = utcnow()
         session.status = "awaiting"
+
+    # ------------------------------------------------------ position screening
+    def generate_position_questions(
+        self,
+        role: str,
+        description: str = "",
+        tags: list[str] | None = None,
+        mcq_count: int | None = None,
+        theory_count: int | None = None,
+    ) -> list[Question]:
+        """
+        Build a screening question set for a company position.
+
+        Deliberately independent of any candidate: no session, no GitHub
+        extraction and no rough profile. The role brief is the only input,
+        which is what lets one position serve a fresh randomised set to every
+        student who attempts it.
+        """
+        scenario = get_scenario(POSITION_SCREENING.name)
+        mcq = scenario.mcq_count if mcq_count is None else mcq_count
+        theory = scenario.theory_count if theory_count is None else theory_count
+
+        instruction = scenario.question_instruction.format(mcq=mcq, theory=theory)
+        tag_list = ", ".join(t.strip() for t in (tags or []) if t.strip())
+        brief = (
+            f"ROLE: {role.strip()}\n\n"
+            f"POSITION DESCRIPTION:\n"
+            f"{(description or '').strip() or '(none provided)'}\n\n"
+            f"REQUIRED TAGS / SKILLS: {tag_list or '(none specified)'}\n\n"
+            "Generate the questions now."
+        )
+
+        raw = self.llm.complete_model(
+            scenario.full_system_prompt,
+            f"{instruction}\n\n{brief}",
+            RawQuestionSet,
+        )
+        return [q for q in raw.to_question_set().questions if q.is_valid()]
 
     # --------------------------------------------------------------- answers
     def submit_answers(self, session_id: str, answers: list[Answer]) -> Session:

@@ -12,6 +12,7 @@ import {
   Code2,
   FileCheck,
   History,
+  Loader2,
   LockKeyhole,
   Maximize,
   Mic,
@@ -95,9 +96,16 @@ const THEORY_PLACEHOLDER =
  * outage degrades to the seeded demo instead of an empty assessment. MCQs with
  * fewer than two options are dropped outright — they cannot be answered.
  */
-function mapBackendQuestions(raw: BackendQuestion[]): AssessmentQuestion[] {
+function mapBackendQuestions(raw: any): AssessmentQuestion[] {
+  const list: BackendQuestion[] = Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.questions)
+    ? raw.questions
+    : Array.isArray(raw?.question_set?.questions)
+    ? raw.question_set.questions
+    : []
   const mapped: AssessmentQuestion[] = []
-  raw.forEach((q, i) => {
+  list.forEach((q, i) => {
     const prompt = (q.prompt ?? '').trim()
     if (!prompt) return
 
@@ -182,14 +190,13 @@ The incident response server acts as an MCP server bridging AI diagnostic agents
 ]
 
 export function HireMeContent() {
-  const { setTab, registerNavigationGuard } = useNavigation()
+  const { setTab } = useNavigation()
   const { triggerRound2Notification, setActiveRole } = useNotifications()
   const [step, setStep] = useState<HireMeStep>('invite')
-  const [showEndSessionModal, setShowEndSessionModal] = useState(false)
-  const lastViolationTimeRef = useRef(0)
 
   // Profile state
   const [candidateName, setCandidateName] = useState('Maya Chen')
+  const [candidateLinkedin, setCandidateLinkedin] = useState('https://linkedin.com/in/mayachen')
   const [candidateGithub, setCandidateGithub] = useState('https://github.com/mayachen-dev')
   const [candidateSkills, setCandidateSkills] = useState('React, TypeScript, Next.js, Node.js, PostgreSQL')
 
@@ -211,21 +218,7 @@ export function HireMeContent() {
   const [consentChecked, setConsentChecked] = useState(false)
   const [isCameraBlack, setIsCameraBlack] = useState(false)
   const blackFrameCountRef = useRef(0)
-  const cameraStreamRef = useRef<MediaStream | null>(null)
-  const micStreamRef = useRef<MediaStream | null>(null)
-  const screenStreamRef = useRef<MediaStream | null>(null)
-
-  useEffect(() => {
-    cameraStreamRef.current = cameraStream
-  }, [cameraStream])
-
-  useEffect(() => {
-    micStreamRef.current = micStream
-  }, [micStream])
-
-  useEffect(() => {
-    screenStreamRef.current = screenStream
-  }, [screenStream])
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false)
 
   // Proctoring tab-switch & integrity state
   const [tabViolations, setTabViolations] = useState(0)
@@ -293,23 +286,13 @@ export function HireMeContent() {
   const animFrameRef = useRef<number | null>(null)
 
   // Screen Details API multi-monitor check
-  const checkScreenSetup = useCallback(() => {
+  useEffect(() => {
     try {
       if ((window.screen as any)?.isExtended) {
         setMultiMonitorDetected(true)
-      } else {
-        setMultiMonitorDetected(false)
       }
-    } catch {
-      setMultiMonitorDetected(false)
-    }
+    } catch {}
   }, [])
-
-  useEffect(() => {
-    checkScreenSetup()
-    window.addEventListener('resize', checkScreenSetup)
-    return () => window.removeEventListener('resize', checkScreenSetup)
-  }, [checkScreenSetup])
 
   // Interactive Flight Recorder Replay loop in Admin Review
   useEffect(() => {
@@ -530,14 +513,6 @@ export function HireMeContent() {
       setScreenStream(stream)
       setScreenReady(true)
 
-      // Ensure camera video preview remains playing and active after screen share picker closes
-      if (videoPreviewRef.current && cameraStreamRef.current) {
-        if (videoPreviewRef.current.srcObject !== cameraStreamRef.current) {
-          videoPreviewRef.current.srcObject = cameraStreamRef.current
-        }
-        videoPreviewRef.current.play().catch(() => {})
-      }
-
       const videoTrack = stream.getVideoTracks()[0]
       if (videoTrack) {
         videoTrack.onended = () => {
@@ -600,28 +575,6 @@ export function HireMeContent() {
     }
   }, [cameraStream, step])
 
-  // Resume camera preview if window temporarily lost focus (e.g. during screen share dialog)
-  useEffect(() => {
-    const handleResumeVideo = () => {
-      const vid = videoPreviewRef.current
-      const cam = cameraStreamRef.current
-      if (vid && cam) {
-        if (vid.srcObject !== cam) {
-          vid.srcObject = cam
-        }
-        if (vid.paused) {
-          vid.play().catch(() => {})
-        }
-      }
-    }
-    window.addEventListener('focus', handleResumeVideo)
-    document.addEventListener('visibilitychange', handleResumeVideo)
-    return () => {
-      window.removeEventListener('focus', handleResumeVideo)
-      document.removeEventListener('visibilitychange', handleResumeVideo)
-    }
-  }, [])
-
   // Attach camera stream to floating PIP element during assessment
   useEffect(() => {
     if (pipVideoRef.current && cameraStream) {
@@ -631,7 +584,7 @@ export function HireMeContent() {
     }
   }, [cameraStream, step])
 
-  // Real-time camera luminance and black screen / covered lens detection
+  // Real-time camera luminance and black screen detection to prevent covered webcams
   useEffect(() => {
     if (!cameraReady || !cameraStream || step !== 'check') {
       setIsCameraBlack(false)
@@ -640,39 +593,28 @@ export function HireMeContent() {
     }
 
     const testCanvas = document.createElement('canvas')
-    testCanvas.width = 64
-    testCanvas.height = 48
-    const testCtx = testCanvas.getContext('2d', { willReadFrequently: true })
+    const ctx = testCanvas.getContext('2d', { willReadFrequently: true })
+    testCanvas.width = 32
+    testCanvas.height = 24
 
     const interval = setInterval(() => {
-      const video = videoPreviewRef.current
-      if (!video || video.paused || video.ended || video.readyState < 2 || video.videoWidth === 0) {
-        return
-      }
+      const vid = videoPreviewRef.current
+      if (!vid || vid.readyState < 2 || !ctx) return
 
       try {
-        if (!testCtx) return
-        testCtx.drawImage(video, 0, 0, 64, 48)
-        const imgData = testCtx.getImageData(0, 0, 64, 48)
-        const data = imgData.data
-
-        let totalLuma = 0
+        ctx.drawImage(vid, 0, 0, 32, 24)
+        const frameData = ctx.getImageData(0, 0, 32, 24).data
+        let sumLuma = 0
         let maxLuma = 0
-        const sampleCount = data.length / 4
+        const pixelCount = 32 * 24
 
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i]
-          const g = data[i + 1]
-          const b = data[i + 2]
-          const luma = 0.299 * r + 0.587 * g + 0.114 * b
-          totalLuma += luma
+        for (let i = 0; i < frameData.length; i += 4) {
+          const luma = 0.299 * frameData[i] + 0.587 * frameData[i + 1] + 0.114 * frameData[i + 2]
+          sumLuma += luma
           if (luma > maxLuma) maxLuma = luma
         }
 
-        const avgLuma = totalLuma / Math.max(1, sampleCount)
-
-        // A black screen, covered camera lens, or blank virtual camera feed typically has
-        // avgLuma < 10 and maxLuma < 25. Normal indoor camera video has avgLuma > 25 and maxLuma > 60.
+        const avgLuma = sumLuma / pixelCount
         const isBlack = avgLuma < 10 && maxLuma < 25
 
         if (isBlack) {
@@ -692,50 +634,66 @@ export function HireMeContent() {
     return () => clearInterval(interval)
   }, [cameraReady, cameraStream, step])
 
-  // Step 3 (Hardware Check) Mandatory Verification Conditions
   const isCameraValid = Boolean(cameraReady && cameraStream && !isCameraBlack)
-  const isTrackingValid = Boolean(
-    cameraReady &&
-    !isCameraBlack &&
-    gazeStatus.faceDetected &&
-    gazeStatus.direction !== 'LOOKING_AWAY' &&
-    gazeStatus.direction !== 'MULTIPLE_FACES' &&
-    !gazeStatus.foreignObjectDetected
-  )
-  const isMicValid = Boolean(micReady && micStream)
-  const isScreenValid = Boolean(screenReady && screenStream)
-  const isFullscreenValid = Boolean(isFullscreen)
-  const isDisplayGuardValid = !multiMonitorDetected
-  const isConsentValid = Boolean(consentChecked)
-
   const isAllConditionsMet = Boolean(
     isCameraValid &&
-    isTrackingValid &&
-    isMicValid &&
-    isScreenValid &&
-    isFullscreenValid &&
-    isDisplayGuardValid &&
-    isConsentValid
+    micReady &&
+    screenReady &&
+    consentChecked &&
+    !gazeStatus.foreignObjectDetected
   )
 
-  const verificationItems = [
-    { id: 'camera', label: 'Camera Input', ready: isCameraValid },
-    { id: 'tracking', label: 'AI Eye Tracking', ready: isTrackingValid },
-    { id: 'mic', label: 'Microphone Input', ready: isMicValid },
-    { id: 'screen', label: 'Screen Share', ready: isScreenValid },
-    { id: 'fullscreen', label: 'Full Screen', ready: isFullscreenValid },
-    { id: 'display', label: 'Display Guard', ready: isDisplayGuardValid },
-  ]
-  const verificationReadyCount = verificationItems.filter((i) => i.ready).length
-
-  // Handle start assessment
+  // Handle start assessment: AI question generation on the spot
   const handleStartAssessment = async () => {
-    if (!isAllConditionsMet || isCameraBlack) return
+    if (!isAllConditionsMet || isGeneratingQuestions) return
     if (!document.fullscreenElement) {
       try {
         await document.documentElement.requestFullscreen()
       } catch {}
     }
+
+    setIsGeneratingQuestions(true)
+    let questionsToUse = activeQuestions
+
+    try {
+      // 1. Generate AI evaluation questions on the spot using candidate profile / GitHub
+      const res = await fetch('/api/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          github_handle: candidateGithub,
+          candidate_name: candidateName,
+          skills: candidateSkills,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data?.id) {
+        ragSessionIdRef.current = data.id
+        const directList = data?.questions ?? data?.question_set?.questions
+        if (Array.isArray(directList) && directList.length > 0) {
+          questionsToUse = mapBackendQuestions(directList)
+          setActiveQuestions(questionsToUse)
+        } else {
+          // Poll for up to 8 seconds for AI question set
+          for (let attempt = 0; attempt < 6; attempt++) {
+            await new Promise((r) => setTimeout(r, 1200))
+            const pr = await fetch(`/api/onboarding?id=${encodeURIComponent(data.id)}`)
+            const pd = await pr.json().catch(() => ({}))
+            const polledList = pd?.questions ?? pd?.question_set?.questions
+            if (Array.isArray(polledList) && polledList.length > 0) {
+              questionsToUse = mapBackendQuestions(polledList)
+              setActiveQuestions(questionsToUse)
+              break
+            }
+          }
+        }
+      }
+    } catch {
+      // Fallback questions remain if backend offline
+    } finally {
+      setIsGeneratingQuestions(false)
+    }
+
     // Reset tab violations, security audit log, and timers
     setTabViolations(0)
     setIsTerminated(false)
@@ -756,7 +714,7 @@ export function HireMeContent() {
     }
     setFlightMetrics(flightRecorderRef.current.computeMetrics())
 
-    setQuestionTimes(Object.fromEntries(activeQuestions.map((q, i) => [i, q.timeLimit])))
+    setQuestionTimes(Object.fromEntries(questionsToUse.map((q, i) => [i, q.timeLimit])))
     setCurrentQuestion(0)
     setStep('assessment')
   }
@@ -896,7 +854,7 @@ export function HireMeContent() {
       tracker.stop()
       eyeTrackerRef.current = null
     }
-  }, [step, isTerminated, cameraStream])
+  }, [step, isTerminated, cameraStream, micStream, screenStream])
 
   // Assessment state
   const [currentQuestion, setCurrentQuestion] = useState(0)
@@ -1097,71 +1055,43 @@ export function HireMeContent() {
     }
   }, [step, answers])
 
-  // Centralized Tab / Page change violation enforcement
-  const triggerTabOrPageViolation = useCallback(
-    (reason: string) => {
-      if (step !== 'assessment' || isTerminated) return
-      const now = Date.now()
-      if (now - lastViolationTimeRef.current < 1500) return
-      lastViolationTimeRef.current = now
-
-      setTabViolations((prev) => {
-        const nextCount = prev + 1
-        if (nextCount === 1) {
-          // Warning #1: Pause test and display the proctoring warning modal
-          setIsPaused(true)
-          setShowTabWarning(true)
-          setSecurityViolations((s) => [
-            {
-              timestamp: new Date().toLocaleTimeString(),
-              type: 'TAB_SWITCH',
-              detail: `Proctoring Warning #1: Unauthorized page navigation or tab switch attempted (${reason}).`,
-              severity: 'WARNING',
-            },
-            ...s,
-          ])
-        } else if (nextCount >= 2) {
-          // Warning #2: Auto-disqualification and session termination
-          setIsTerminated(true)
-          setShowTabWarning(false)
-          setIsPaused(true)
-          setTerminationReason(
-            `Session Terminated: Multiple unauthorized page changes or tab switch attempts detected during active proctoring session (${reason}).`
-          )
-
-          setSecurityViolations((s) => [
-            {
-              timestamp: new Date().toLocaleTimeString(),
-              type: 'TAB_SWITCH',
-              detail: `CRITICAL INTEGRITY DISQUALIFICATION: Candidate attempted repeated unauthorized page changes or tab switches (${reason}). Session terminated.`,
-              severity: 'CRITICAL',
-            },
-            ...s,
-          ])
-
-          // Stop all active hardware streams
-          if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
-          if (micStream) micStream.getTracks().forEach((t) => t.stop())
-          if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
-          setCameraReady(false)
-          setMicReady(false)
-          setScreenReady(false)
-
-          setStep('results')
-        }
-        return nextCount
-      })
-    },
-    [step, isTerminated, cameraStream, micStream, screenStream]
-  )
-
-  // 1. Tab visibility change detection (switching tabs or minimizing window)
+  // Tab switching detection listener during assessment
   useEffect(() => {
     if (step !== 'assessment' || isTerminated) return
 
+    let lastEventTime = 0
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        triggerTabOrPageViolation('Switched browser tab or minimized window')
+        const now = Date.now()
+        if (now - lastEventTime < 1500) return
+        lastEventTime = now
+
+        setTabViolations((prev) => {
+          const nextCount = prev + 1
+          if (nextCount === 1) {
+            // First tab switch: Give 1 warning and pause
+            setIsPaused(true)
+            setShowTabWarning(true)
+          } else if (nextCount >= 2) {
+            // Second tab switch: Terminate the session immediately!
+            setIsTerminated(true)
+            setShowTabWarning(false)
+            setIsPaused(true)
+            setTerminationReason('Multiple tab switches detected during active proctoring session.')
+
+            // Stop all active hardware streams
+            if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+            if (micStream) micStream.getTracks().forEach((t) => t.stop())
+            if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
+            setCameraReady(false)
+            setMicReady(false)
+            setScreenReady(false)
+
+            setStep('results')
+          }
+          return nextCount
+        })
       }
     }
 
@@ -1169,96 +1099,18 @@ export function HireMeContent() {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [step, isTerminated, triggerTabOrPageViolation])
+  }, [step, isTerminated, cameraStream, micStream, screenStream])
 
-  // 2. In-app navigation guard (prevents changing pages via Navbar or route links without ending session)
-  useEffect(() => {
-    if (step !== 'assessment' || isTerminated) {
-      registerNavigationGuard(null)
-      return
-    }
-
-    const guard = (targetTab: string) => {
-      if (targetTab === 'hireme') return true
-      triggerTabOrPageViolation(`Attempted to navigate to ${targetTab} page`)
-      return false
-    }
-
-    registerNavigationGuard(guard)
-    return () => {
-      registerNavigationGuard(null)
-    }
-  }, [step, isTerminated, triggerTabOrPageViolation, registerNavigationGuard])
-
-  // 3. Browser Back / Forward button navigation lock (popstate)
-  useEffect(() => {
-    if (step !== 'assessment' || isTerminated) return
-
-    window.history.pushState({ inAssessment: true }, '', window.location.href)
-
-    const handlePopState = () => {
-      if (typeof window !== 'undefined' && (window as any).__isExitingApp) return
-      window.history.pushState({ inAssessment: true }, '', window.location.href)
-      triggerTabOrPageViolation('Browser Back/Forward navigation')
-    }
-
-    window.addEventListener('popstate', handlePopState)
-    return () => {
-      window.removeEventListener('popstate', handlePopState)
-    }
-  }, [step, isTerminated, triggerTabOrPageViolation])
-
-  // 4. Browser Window / Tab Close & Reload Guard (beforeunload)
-  useEffect(() => {
-    if (step !== 'assessment' || isTerminated) return
-
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (typeof window !== 'undefined' && (window as any).__isExitingApp) return
-      e.preventDefault()
-      e.returnValue = 'An engineering assessment is currently in progress. Leaving this page will disqualify your session.'
-      return e.returnValue
-    }
-
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, [step, isTerminated])
-
-  // 5. Global Link Interception (prevent any <a> link click from navigating away during assessment)
-  useEffect(() => {
-    if (step !== 'assessment' || isTerminated) return
-
-    const handleLinkClick = (e: MouseEvent) => {
-      if (typeof window !== 'undefined' && (window as any).__isExitingApp) return
-      const anchor = (e.target as HTMLElement)?.closest('a')
-      if (!anchor || !anchor.href) return
-      try {
-        const url = new URL(anchor.href, window.location.origin)
-        if (url.pathname !== window.location.pathname) {
-          e.preventDefault()
-          e.stopPropagation()
-          triggerTabOrPageViolation(`Clicked external/page link to ${url.pathname}`)
-        }
-      } catch {}
-    }
-
-    document.addEventListener('click', handleLinkClick, true)
-    return () => {
-      document.removeEventListener('click', handleLinkClick, true)
-    }
-  }, [step, isTerminated, triggerTabOrPageViolation])
-
-  // Cleanup all streams ONLY when component unmounts
+  // Cleanup all streams when component unmounts
   useEffect(() => {
     return () => {
-      cameraStreamRef.current?.getTracks().forEach((t) => t.stop())
-      micStreamRef.current?.getTracks().forEach((t) => t.stop())
-      screenStreamRef.current?.getTracks().forEach((t) => t.stop())
+      if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
+      if (micStream) micStream.getTracks().forEach((t) => t.stop())
+      if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
       if (audioContextRef.current) audioContextRef.current.close().catch(() => {})
     }
-  }, [])
+  }, [cameraStream, micStream, screenStream])
 
   // Recruiter Admin state
   const [selectedCandidate, setSelectedCandidate] = useState('Maya Chen')
@@ -1359,35 +1211,20 @@ export function HireMeContent() {
               { id: 'invite', label: 'Brief' },
               { id: 'profile', label: 'Profile' },
               { id: 'check', label: 'System' },
+              { id: 'assessment', label: 'Assessment' },
             ].map((item) => (
               <button
                 key={item.id}
-                onClick={() => {
-                  if (step === 'assessment') {
-                    triggerTabOrPageViolation(`Attempted to leave assessment via stepper (${item.label})`)
-                    return
-                  }
-                  if (step === 'results') return
-                  setStep(item.id as HireMeStep)
-                }}
-                disabled={step === 'assessment'}
-                className={`rounded-xl border border-[#171717] px-3 py-1 text-xs font-black uppercase transition-all dark:border-[#2e323b] ${
+                onClick={() => setStep(item.id as HireMeStep)}
+                className={`cursor-pointer rounded-xl border border-[#171717] px-3 py-1 text-xs font-black uppercase transition-all dark:border-[#2e323b] ${
                   step === item.id
-                    ? 'bg-[#171717] text-[#fffaf0] shadow-[2px_2px_0_#39d5c8] dark:bg-[#39d5c8] dark:text-[#171717] dark:shadow-[2px_2px_0_#000000] cursor-default'
-                    : step === 'assessment'
-                    ? 'bg-white/40 text-[#171717]/40 cursor-not-allowed dark:bg-[#15171c]/40 dark:text-[#f4f4f7]/40'
-                    : 'bg-white text-[#171717] hover:bg-[#e0fbf9] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:hover:bg-[#20242e] cursor-pointer'
+                    ? 'bg-[#171717] text-[#fffaf0] shadow-[2px_2px_0_#39d5c8] dark:bg-[#39d5c8] dark:text-[#171717] dark:shadow-[2px_2px_0_#000000]'
+                    : 'bg-white text-[#171717] hover:bg-[#e0fbf9] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:hover:bg-[#20242e]'
                 }`}
               >
                 {item.label}
               </button>
             ))}
-            {step === 'assessment' && (
-              <div className="flex items-center gap-1.5 rounded-xl border border-[#171717] bg-[#ff57ce] px-3 py-1 text-xs font-black uppercase text-white shadow-[2px_2px_0_#171717] dark:border-[#000000]">
-                <span className="h-2 w-2 animate-ping rounded-full bg-white" />
-                <span>Assessment</span>
-              </div>
-            )}
           </div>
         </div>
 
@@ -1500,6 +1337,16 @@ export function HireMeContent() {
               </div>
 
               <div>
+                <label className="mb-1 block text-xs font-black uppercase text-[#171717] dark:text-[#d4d4d8]">LinkedIn URL</label>
+                <input
+                  type="url"
+                  value={candidateLinkedin}
+                  onChange={(e) => setCandidateLinkedin(e.target.value)}
+                  className="w-full rounded-xl border border-[#171717] bg-[#fffaf0] p-2.5 text-xs font-bold text-[#171717] outline-none dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7]"
+                />
+              </div>
+
+              <div>
                 <label className="mb-1 block text-xs font-black uppercase text-[#171717] dark:text-[#d4d4d8]">GitHub URL</label>
                 <input
                   type="url"
@@ -1585,30 +1432,6 @@ export function HireMeContent() {
 
                 {cameraStream ? (
                   <>
-                    {/* Black Screen / Covered Camera Detection Overlay */}
-                    {isCameraBlack && (
-                      <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 p-4 text-center backdrop-blur-xs animate-in fade-in duration-200">
-                        <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-rose-500 bg-rose-500/20 text-rose-400 mb-2 animate-pulse">
-                          <VideoOff className="h-6 w-6" />
-                        </div>
-                        <span className="text-xs font-black uppercase text-rose-400">
-                          Camera Feed is Black / Blank
-                        </span>
-                        <p className="mt-1 max-w-xs text-[10px] text-white/90 leading-relaxed font-bold">
-                          No active video signal detected. Uncover your camera lens, open privacy shutter, or switch camera device.
-                        </p>
-                        {videoDevices.length > 1 && (
-                          <button
-                            onClick={() => switchCamera()}
-                            className="mt-3 cursor-pointer flex items-center gap-1.5 rounded border border-[#171717] bg-[#ffd84d] px-3 py-1 text-[10px] font-black uppercase text-[#171717] hover:brightness-105"
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                            <span>Switch Camera ({videoDevices.length} available)</span>
-                          </button>
-                        )}
-                      </div>
-                    )}
-
                     {/* Dynamic Primary Face Bounding Box */}
                     {gazeStatus.landmarks && gazeStatus.landmarks.faceDetected && (
                       <div
@@ -1758,49 +1581,26 @@ export function HireMeContent() {
               <div className="flex flex-col justify-between rounded-xl border-2 border-[#171717] bg-[#fffaf0] p-4 dark:border-[#2e323b] dark:bg-[#1c1f26]">
                 <div className="space-y-2">
                   {/* Camera Input with Switch option */}
-                  <div className={`flex items-center justify-between rounded border p-2 text-[11px] font-bold transition-all ${
-                    isCameraValid
-                      ? 'border-emerald-500/50 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                      : isCameraBlack
-                      ? 'border-rose-500/60 bg-rose-50/50 dark:border-rose-900/30 dark:bg-rose-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                      : 'border-[#171717] bg-white dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]'
-                  }`}>
+                  <div className="flex items-center justify-between rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
                     <span className="flex items-center gap-1.5">
                       <Video className="h-3.5 w-3.5 text-[#171717] dark:text-[#39d5c8]" />
                       Camera Input
                     </span>
                     {cameraReady ? (
-                      isCameraBlack ? (
-                        <div className="flex items-center gap-1.5">
-                          <span className="flex items-center gap-1 text-rose-600 dark:text-rose-400 font-black text-[10px]">
-                            <AlertTriangle className="h-3 w-3" /> Black Screen
-                          </span>
-                          <button
-                            onClick={() => switchCamera()}
-                            disabled={isRequestingCamera}
-                            title="Switch camera device"
-                            className="cursor-pointer flex items-center gap-1 rounded border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[10px] font-black uppercase text-[#171717] hover:brightness-105"
-                          >
-                            <RefreshCw className={`h-2.5 w-2.5 ${isRequestingCamera ? 'animate-spin' : ''}`} />
-                            <span>Switch</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5">
-                          <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                            <Check className="h-3 w-3" /> Ready
-                          </span>
-                          <button
-                            onClick={() => switchCamera()}
-                            disabled={isRequestingCamera}
-                            title="Switch camera device"
-                            className="cursor-pointer flex items-center gap-1 rounded border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[10px] font-black uppercase text-[#171717] hover:brightness-105"
-                          >
-                            <RefreshCw className={`h-2.5 w-2.5 ${isRequestingCamera ? 'animate-spin' : ''}`} />
-                            <span>Switch</span>
-                          </button>
-                        </div>
-                      )
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                          <Check className="h-3 w-3" /> Ready
+                        </span>
+                        <button
+                          onClick={() => switchCamera()}
+                          disabled={isRequestingCamera}
+                          title="Switch camera device"
+                          className="cursor-pointer flex items-center gap-1 rounded border border-[#171717] bg-[#ffd84d] px-2 py-0.5 text-[10px] font-black uppercase text-[#171717] hover:brightness-105"
+                        >
+                          <RefreshCw className={`h-2.5 w-2.5 ${isRequestingCamera ? 'animate-spin' : ''}`} />
+                          <span>Switch</span>
+                        </button>
+                      </div>
                     ) : (
                       <button
                         onClick={() => startCamera()}
@@ -1831,34 +1631,17 @@ export function HireMeContent() {
                   )}
 
                   {/* Real-Time Eye & Head Tilt Tracking Verification Card */}
-                  {cameraReady ? (
-                    <div className={`rounded border p-2 text-[11px] font-bold transition-all ${
-                      isTrackingValid
-                        ? 'border-emerald-500/50 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                        : 'border-amber-500/60 bg-amber-50/50 dark:border-amber-500/30 dark:bg-amber-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                    }`}>
+                  {cameraReady && (
+                    <div className="rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
                       <div className="flex items-center justify-between">
                         <span className="flex items-center gap-1.5">
                           <Sparkles className="h-3.5 w-3.5 text-[#39d5c8]" />
                           AI Eye & Head Tilt Tracking
                         </span>
                         <span className={`flex items-center gap-1 text-[10px] font-black ${
-                          isTrackingValid ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+                          gazeStatus.direction === 'CENTER' ? 'text-emerald-500 dark:text-emerald-400' : 'text-amber-500 dark:text-amber-400'
                         }`}>
-                          {isTrackingValid && <Check className="h-3 w-3" />}
-                          {isTrackingValid
-                            ? 'Ready'
-                            : !gazeStatus.faceDetected || gazeStatus.direction === 'LOOKING_AWAY'
-                            ? 'Face Missing'
-                            : gazeStatus.direction === 'MULTIPLE_FACES'
-                            ? 'Multiple Faces'
-                            : gazeStatus.foreignObjectDetected
-                            ? 'Object Detected'
-                            : gazeStatus.direction === 'HEAD_TILT'
-                            ? 'Align Head (Tilted)'
-                            : gazeStatus.direction === 'LOOKING_DOWN'
-                            ? 'Look Up at Screen'
-                            : 'Calibrating'}
+                          {gazeStatus.direction === 'CENTER' ? 'Aligned' : 'Testing Tilt'}
                         </span>
                       </div>
                       <div className="mt-1.5 flex items-center justify-between rounded bg-[#171717]/5 dark:bg-[#1c1f26] px-2 py-1 text-[9px]">
@@ -1873,11 +1656,7 @@ export function HireMeContent() {
                             ? `⚠️ Turned Right (${gazeStatus.landmarks?.yaw ?? 0}°)`
                             : gazeStatus.direction === 'HEAD_TILT'
                             ? `⚠️ Head Tilt (${gazeStatus.landmarks?.roll ?? 0}°)`
-                            : gazeStatus.direction === 'MULTIPLE_FACES'
-                            ? '⚠️ Multiple People in Frame'
-                            : gazeStatus.foreignObjectDetected
-                            ? '⚠️ Prohibited Device in Frame'
-                            : '⚠️ Face Missing - Look into Camera'}
+                            : 'Face Missing'}
                         </span>
                         <button
                           onClick={() => eyeTrackerRef.current?.recalibrate()}
@@ -1887,24 +1666,10 @@ export function HireMeContent() {
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    <div className="flex items-center justify-between rounded border border-dashed border-[#171717]/30 bg-white/40 p-2 text-[11px] font-bold text-[#171717]/50 dark:border-[#2e323b] dark:bg-[#15171c]/40 dark:text-[#a1a1aa]/50">
-                      <span className="flex items-center gap-1.5">
-                        <Sparkles className="h-3.5 w-3.5" />
-                        AI Eye & Head Tilt Tracking
-                      </span>
-                      <span className="text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
-                        Awaiting Camera
-                      </span>
-                    </div>
                   )}
 
                   {/* Microphone Input with Dynamic Sound Wave Visualizer */}
-                  <div className={`flex items-center justify-between rounded border p-2 text-[11px] font-bold transition-all ${
-                    isMicValid
-                      ? 'border-emerald-500/50 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                      : 'border-[#171717] bg-white dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]'
-                  }`}>
+                  <div className="flex items-center justify-between rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
                     <div className="flex items-center gap-1.5">
                       <Mic className="h-3.5 w-3.5 text-[#171717] dark:text-[#39d5c8]" />
                       <span>Microphone Input</span>
@@ -1941,11 +1706,7 @@ export function HireMeContent() {
                   </div>
 
                   {/* Screen Share Permissions */}
-                  <div className={`flex items-center justify-between rounded border p-2 text-[11px] font-bold transition-all ${
-                    isScreenValid
-                      ? 'border-emerald-500/50 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                      : 'border-[#171717] bg-white dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]'
-                  }`}>
+                  <div className="flex items-center justify-between rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
                     <span className="flex items-center gap-1.5">
                       <Monitor className="h-3.5 w-3.5 text-[#171717] dark:text-[#39d5c8]" />
                       Screen Share
@@ -1974,11 +1735,7 @@ export function HireMeContent() {
                   </div>
 
                   {/* Full Screen Mode */}
-                  <div className={`flex items-center justify-between rounded border p-2 text-[11px] font-bold transition-all ${
-                    isFullscreenValid
-                      ? 'border-emerald-500/50 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                      : 'border-[#171717] bg-white dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]'
-                  }`}>
+                  <div className="flex items-center justify-between rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
                     <span className="flex items-center gap-1.5">
                       {isFullscreen ? (
                         <Minimize className="h-3.5 w-3.5 text-[#171717] dark:text-[#39d5c8]" />
@@ -2002,29 +1759,15 @@ export function HireMeContent() {
                   </div>
 
                   {/* Display Guard (Dual Monitor Detection) */}
-                  <div className={`flex items-center justify-between rounded border p-2 text-[11px] font-bold transition-all ${
-                    isDisplayGuardValid
-                      ? 'border-emerald-500/50 bg-emerald-50/40 dark:border-emerald-500/30 dark:bg-emerald-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                      : 'border-rose-500/60 bg-rose-50/50 dark:border-rose-900/30 dark:bg-rose-950/20 text-[#171717] dark:text-[#f4f4f7]'
-                  }`}>
+                  <div className="flex items-center justify-between rounded border border-[#171717] bg-white p-2 text-[11px] font-bold dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7]">
                     <span className="flex items-center gap-1.5">
                       <Monitor className="h-3.5 w-3.5 text-[#171717] dark:text-[#39d5c8]" />
                       Display Guard
                     </span>
                     {multiMonitorDetected ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="flex items-center gap-1 text-rose-600 dark:text-rose-400 text-[10px] font-black">
-                          <AlertTriangle className="h-3 w-3" /> Multi-Monitor
-                        </span>
-                        <button
-                          onClick={checkScreenSetup}
-                          title="Re-check screen configuration"
-                          className="cursor-pointer flex items-center gap-1 rounded border border-[#171717] bg-[#ffd84d] px-1.5 py-0.5 text-[9px] font-black uppercase text-[#171717] hover:brightness-105"
-                        >
-                          <RefreshCw className="h-2 w-2" />
-                          <span>Recheck</span>
-                        </button>
-                      </div>
+                      <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 text-[10px]">
+                        <AlertTriangle className="h-3 w-3" /> Multi-Monitor
+                      </span>
                     ) : (
                       <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-[10px]">
                         <Check className="h-3 w-3" /> Single Screen
@@ -2074,89 +1817,6 @@ export function HireMeContent() {
               </div>
             </div>
 
-            {/* Real-time Setup Readiness Status Checklist */}
-            <div className={`mt-4 rounded-xl border p-3 text-xs font-bold transition-all ${
-              isAllConditionsMet
-                ? 'border-emerald-500/60 bg-emerald-50/80 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200'
-                : 'border-amber-500/60 bg-amber-50/80 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200'
-            }`}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 font-black uppercase text-[11px]">
-                  {isAllConditionsMet ? (
-                    <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                  ) : (
-                    <ShieldAlert className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                  )}
-                  <span>
-                    {isAllConditionsMet
-                      ? 'All Conditions Active & Verified (6/6 Ready)'
-                      : `Setup Verification Checklist (${verificationReadyCount}/6 Ready)`}
-                  </span>
-                </div>
-                <span className="text-[10px] font-black uppercase text-[#171717]/60 dark:text-white/60">
-                  {isAllConditionsMet ? 'Ready to Begin' : 'All 6 Conditions Required'}
-                </span>
-              </div>
-
-              <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-[10px]">
-                <div className={`flex items-center gap-1 rounded px-2 py-1 font-bold ${
-                  isCameraValid
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : isCameraBlack
-                    ? 'bg-rose-100 text-rose-900 border border-rose-300/80 dark:bg-rose-900/40 dark:border-rose-800 dark:text-rose-200'
-                    : 'bg-amber-100 text-amber-900 border border-amber-300/80 dark:bg-amber-900/40 dark:border-amber-800 dark:text-amber-200'
-                }`}>
-                  {isCameraValid ? <Check className="h-3 w-3 shrink-0" /> : <AlertCircle className="h-3 w-3 shrink-0" />}
-                  <span className="truncate">Camera: {isCameraValid ? 'Ready' : isCameraBlack ? 'Black Screen' : 'Needed'}</span>
-                </div>
-
-                <div className={`flex items-center gap-1 rounded px-2 py-1 font-bold ${
-                  isTrackingValid
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : 'bg-amber-100 text-amber-900 border border-amber-300/80 dark:bg-amber-900/40 dark:border-amber-800 dark:text-amber-200'
-                }`}>
-                  {isTrackingValid ? <Check className="h-3 w-3 shrink-0" /> : <AlertCircle className="h-3 w-3 shrink-0" />}
-                  <span className="truncate">AI Tracking: {isTrackingValid ? 'Ready' : !cameraReady ? 'Needs Camera' : !gazeStatus.faceDetected ? 'Face Missing' : 'Align Face'}</span>
-                </div>
-
-                <div className={`flex items-center gap-1 rounded px-2 py-1 font-bold ${
-                  isMicValid
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : 'bg-amber-100 text-amber-900 border border-amber-300/80 dark:bg-amber-900/40 dark:border-amber-800 dark:text-amber-200'
-                }`}>
-                  {isMicValid ? <Check className="h-3 w-3 shrink-0" /> : <AlertCircle className="h-3 w-3 shrink-0" />}
-                  <span className="truncate">Microphone: {isMicValid ? 'Ready' : 'Needed'}</span>
-                </div>
-
-                <div className={`flex items-center gap-1 rounded px-2 py-1 font-bold ${
-                  isScreenValid
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : 'bg-amber-100 text-amber-900 border border-amber-300/80 dark:bg-amber-900/40 dark:border-amber-800 dark:text-amber-200'
-                }`}>
-                  {isScreenValid ? <Check className="h-3 w-3 shrink-0" /> : <AlertCircle className="h-3 w-3 shrink-0" />}
-                  <span className="truncate">Screen Share: {isScreenValid ? 'Ready' : 'Needed'}</span>
-                </div>
-
-                <div className={`flex items-center gap-1 rounded px-2 py-1 font-bold ${
-                  isFullscreenValid
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : 'bg-amber-100 text-amber-900 border border-amber-300/80 dark:bg-amber-900/40 dark:border-amber-800 dark:text-amber-200'
-                }`}>
-                  {isFullscreenValid ? <Check className="h-3 w-3 shrink-0" /> : <AlertCircle className="h-3 w-3 shrink-0" />}
-                  <span className="truncate">Full Screen: {isFullscreenValid ? 'Ready' : 'Needed'}</span>
-                </div>
-
-                <div className={`flex items-center gap-1 rounded px-2 py-1 font-bold ${
-                  isDisplayGuardValid
-                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-                    : 'bg-rose-100 text-rose-900 border border-rose-300/80 dark:bg-rose-900/40 dark:border-rose-800 dark:text-rose-200'
-                }`}>
-                  {isDisplayGuardValid ? <Check className="h-3 w-3 shrink-0" /> : <AlertTriangle className="h-3 w-3 shrink-0" />}
-                  <span className="truncate">Display Guard: {isDisplayGuardValid ? 'Single Screen' : 'Multi-Monitor'}</span>
-                </div>
-              </div>
-            </div>
-
             {/* Real-time Phone / Foreign Object Warning Banner */}
             {gazeStatus.foreignObjectDetected && (
               <div className="mt-4 rounded-xl border-2 border-rose-500 bg-rose-50 p-3 text-xs font-bold text-rose-800 dark:border-rose-900/80 dark:bg-rose-950/50 dark:text-rose-200 animate-pulse">
@@ -2178,11 +1838,16 @@ export function HireMeContent() {
                 <ArrowLeft className="h-3.5 w-3.5" /> Back
               </button>
               <button
-                disabled={!isAllConditionsMet}
+                disabled={!isAllConditionsMet || isGeneratingQuestions}
                 onClick={handleStartAssessment}
-                className="btn-neo btn-neo-lemon py-2 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                className="btn-neo btn-neo-lemon py-2 text-xs disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
-                {gazeStatus.foreignObjectDetected ? (
+                {isGeneratingQuestions ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>AI Generating Questions...</span>
+                  </>
+                ) : gazeStatus.foreignObjectDetected ? (
                   <span className="flex items-center gap-1.5 text-rose-700 dark:text-rose-300 font-black">
                     <AlertTriangle className="h-3.5 w-3.5" /> Remove Phone to Start
                   </span>
@@ -2194,13 +1859,22 @@ export function HireMeContent() {
                   <span className="flex items-center gap-1.5 text-[#171717]/70 dark:text-[#f4f4f7]/70 font-black">
                     <LockKeyhole className="h-3.5 w-3.5" /> Check Integrity Consent
                   </span>
-                ) : !isAllConditionsMet ? (
+                ) : !cameraReady ? (
                   <span className="flex items-center gap-1.5 text-[#171717]/70 dark:text-[#f4f4f7]/70 font-black">
-                    <LockKeyhole className="h-3.5 w-3.5" /> Complete Setup ({verificationReadyCount}/6 Ready)
+                    <LockKeyhole className="h-3.5 w-3.5" /> Enable Camera
+                  </span>
+                ) : !micReady ? (
+                  <span className="flex items-center gap-1.5 text-[#171717]/70 dark:text-[#f4f4f7]/70 font-black">
+                    <LockKeyhole className="h-3.5 w-3.5" /> Enable Microphone
+                  </span>
+                ) : !screenReady ? (
+                  <span className="flex items-center gap-1.5 text-[#171717]/70 dark:text-[#f4f4f7]/70 font-black">
+                    <LockKeyhole className="h-3.5 w-3.5" /> Enable Screen Share
                   </span>
                 ) : (
                   <>
-                    Start Assessment <Play className="h-3.5 w-3.5 fill-current" />
+                    <span>Start Assessment</span>
+                    <Play className="h-3.5 w-3.5 fill-current" />
                   </>
                 )}
               </button>
@@ -2247,18 +1921,6 @@ export function HireMeContent() {
                 >
                   {isPaused ? <Play className="inline h-3 w-3" /> : <Pause className="inline h-3 w-3" />}
                   <span className="ml-1">{isPaused ? 'Resume' : 'Pause'}</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setIsPaused(true)
-                    setShowEndSessionModal(true)
-                  }}
-                  className="cursor-pointer flex items-center gap-1 rounded-lg border border-rose-500 bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 transition-colors"
-                  title="End and submit assessment session"
-                >
-                  <XCircle className="h-3 w-3" />
-                  <span>End Session</span>
                 </button>
               </div>
             </div>
@@ -2481,9 +2143,9 @@ export function HireMeContent() {
           </div>
         )}
 
-        {/* Tab & Page Switching Warning Modal */}
+        {/* Tab Switching Warning Modal */}
         {showTabWarning && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
             <div className="w-full max-w-lg rounded-2xl border-4 border-[#171717] bg-[#ffd84d] p-6 text-[#171717] shadow-hard-lg dark:border-[#000000]">
               <div className="flex items-center gap-3">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 border-[#171717] bg-[#ff6b6b] text-white">
@@ -2494,17 +2156,17 @@ export function HireMeContent() {
                     PROCTORING ALERT · 1 OF 1 WARNING
                   </span>
                   <h3 className="font-display text-2xl uppercase tracking-tight sm:text-3xl">
-                    Tab / Page Switch Detected!
+                    Tab Switch Detected!
                   </h3>
                 </div>
               </div>
 
               <div className="mt-4 rounded-xl border-2 border-[#171717] bg-white p-4 text-xs font-bold leading-relaxed text-[#171717] shadow-[2px_2px_0_#171717]">
                 <p>
-                  You attempted to switch tabs, change pages, or leave this active proctored assessment window. Navigating to other pages or switching tabs without ending your session is strictly forbidden.
+                  You navigated away from this proctored assessment window. Leaving the assessment, switching tabs, or minimizing the active window is strictly monitored.
                 </p>
                 <p className="mt-2 text-rose-700 font-black">
-                  ⚠️ THIS IS YOUR FIRST AND FINAL WARNING. If you try to switch tabs, change pages, or leave this assessment window again without submitting, your session will be IMMEDIATELY TERMINATED with an automatic disqualification flag.
+                  ⚠️ THIS IS YOUR FIRST AND FINAL WARNING. If you switch tabs or leave this window again, your assessment session will be IMMEDIATELY TERMINATED with a disqualification flag sent to the recruitment team.
                 </p>
               </div>
 
@@ -2513,56 +2175,10 @@ export function HireMeContent() {
                   setShowTabWarning(false)
                   setIsPaused(false)
                 }}
-                className="btn-neo btn-neo-ink mt-5 w-full py-3 text-xs uppercase cursor-pointer"
+                className="btn-neo btn-neo-ink mt-5 w-full py-3 text-xs uppercase"
               >
-                I Understand — Return to Assessment
+                I Understand — Resume Assessment
               </button>
-            </div>
-          </div>
-        )}
-
-        {/* End Session Confirmation Modal */}
-        {showEndSessionModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs animate-in fade-in duration-150">
-            <div className="w-full max-w-md rounded-2xl border-4 border-[#171717] bg-white p-6 text-[#171717] shadow-hard-lg dark:border-[#000000] dark:bg-[#15171c] dark:text-[#f4f4f7]">
-              <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border-2 border-[#171717] bg-rose-500 text-white">
-                  <XCircle className="h-6 w-6" />
-                </div>
-                <div>
-                  <h3 className="font-display text-xl uppercase tracking-tight">
-                    End Assessment Session?
-                  </h3>
-                  <p className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">
-                    Submit current answers and finish proctoring
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-xl border border-[#171717]/15 bg-[#fffaf0] p-3 text-xs font-bold leading-relaxed text-[#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#d4d4d8]">
-                Are you sure you want to end your engineering assessment? Your answers will be submitted for grading and all proctoring hardware streams will be stopped.
-              </div>
-
-              <div className="mt-5 flex items-center justify-end gap-2">
-                <button
-                  onClick={() => {
-                    setShowEndSessionModal(false)
-                    setIsPaused(false)
-                  }}
-                  className="btn-neo btn-neo-paper py-2 px-3 text-xs cursor-pointer"
-                >
-                  Cancel & Continue
-                </button>
-                <button
-                  onClick={() => {
-                    setShowEndSessionModal(false)
-                    finishAssessment()
-                  }}
-                  className="btn-neo btn-neo-lemon py-2 px-4 text-xs font-black cursor-pointer"
-                >
-                  Yes, End & Submit
-                </button>
-              </div>
             </div>
           </div>
         )}

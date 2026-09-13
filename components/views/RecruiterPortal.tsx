@@ -174,8 +174,11 @@ export function RecruiterPortal() {
       )
     )
 
-    // Trigger in-app notification for candidate & mentor
-    triggerRound2Notification('candidate', studentName)
+    // Trigger targeted in-app notification for candidate & mentor
+    triggerRound2Notification('candidate', studentName, studentId, {
+      subtitle: `Invited to Round 2 by recruiter for ${meetingDate}.`,
+      meetingId: `mentorship-${studentId.slice(0, 8)}`,
+    })
     setActiveRole('mentor')
 
     setContactSuccessToast(`Round 2 invitation sent to ${studentName}! Video mentorship meeting room generated.`)
