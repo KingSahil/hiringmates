@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { LogOut, Sun, Moon, Settings, ClipboardList } from 'lucide-react'
+import { LogOut, Sun, Moon, Settings } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useTheme } from '@/lib/theme'
@@ -9,7 +9,7 @@ import { NotificationBell } from '@/components/NotificationBell'
 
 export function Navbar() {
   const { user, isAuthorized, signInWithGithub, signOut, setIsSettingsOpen } = useAuth()
-  const { tab, setTab } = useNavigation()
+  const { tab, setTab, registerNavigationGuard } = useNavigation()
   const { theme, toggleTheme } = useTheme()
 
   const navigateTo = (target: AppTab, e?: React.MouseEvent) => {
@@ -18,6 +18,21 @@ export function Navbar() {
       e.preventDefault()
     }
     setTab(target)
+  }
+
+  const handleExit = async () => {
+    if (typeof window !== 'undefined') {
+      (window as any).__isExitingApp = true
+    }
+    registerNavigationGuard(null)
+    try {
+      await signOut()
+    } finally {
+      setTab('home')
+      if (typeof window !== 'undefined') {
+        window.location.href = '/'
+      }
+    }
   }
 
   const userDisplayName =
@@ -83,12 +98,27 @@ export function Navbar() {
             /* Dedicated Recruiter Navbar Controls */
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setTab('home')}
+                onClick={() => {
+                  setTab('home')
+                  if (typeof window !== 'undefined') {
+                    window.location.href = '/'
+                  }
+                }}
                 className="flex cursor-pointer items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-white px-3 py-1.5 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:bg-[#ff57ce] hover:text-white dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:shadow-[2px_2px_0_#000000]"
                 title="Exit Recruiter View to Candidate Platform"
               >
                 <span>Exit Recruiter Portal</span>
               </button>
+              {isAuthorized && (
+                <button
+                  onClick={handleExit}
+                  className="flex cursor-pointer items-center gap-1 rounded-xl border-2 border-[#171717] bg-[#fffaf0] px-2.5 py-1.5 text-xs font-black uppercase text-[#171717] shadow-[1px_1px_0_#171717] transition hover:bg-rose-100 dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7] dark:shadow-[1px_1px_0_#000000] dark:hover:bg-rose-950/40"
+                  title="Sign Out"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Exit</span>
+                </button>
+              )}
             </div>
           ) : isAuthorized ? (
             <div className="flex items-center gap-2">
@@ -102,17 +132,6 @@ export function Navbar() {
                 <span className="hidden sm:inline">Settings</span>
               </button>
 
-              {/* Candidate assessment */}
-              <a
-                href="/assessment"
-                onClick={(e) => navigateTo('assessment', e)}
-                className="flex cursor-pointer items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-[#ffd84d] px-2.5 py-1.5 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:bg-[#f5c518] dark:border-[#2e323b] dark:shadow-[2px_2px_0_#000000]"
-                title="Candidate assessment"
-              >
-                <ClipboardList className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Assessment</span>
-              </a>
-
               {/* User Identity Pill */}
               <div className="flex items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-white px-2.5 py-1.5 shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:shadow-[2px_2px_0_#000000]">
                 <div className="flex h-5 w-5 items-center justify-center rounded-full border border-[#171717] bg-[#ffd84d] text-[9px] font-black text-[#171717]">
@@ -125,7 +144,7 @@ export function Navbar() {
 
               {/* Sign Out Button */}
               <button
-                onClick={signOut}
+                onClick={handleExit}
                 className="flex cursor-pointer items-center gap-1 rounded-xl border-2 border-[#171717] bg-[#fffaf0] px-2.5 py-1.5 text-xs font-black uppercase text-[#171717] shadow-[1px_1px_0_#171717] transition hover:bg-rose-100 dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#f4f4f7] dark:shadow-[1px_1px_0_#000000] dark:hover:bg-rose-950/40"
                 title="Sign Out"
               >

@@ -128,6 +128,9 @@ export class EyeTrackerEngine {
     this.sumPitch = 0
     this.sumYaw = 0
     this.sumRoll = 0
+    this.smoothPitch = 0
+    this.smoothYaw = 0
+    this.smoothRoll = 0
   }
 
   public recalibrate() {
@@ -136,6 +139,11 @@ export class EyeTrackerEngine {
     this.sumPitch = 0
     this.sumYaw = 0
     this.sumRoll = 0
+    this.smoothPitch = 0
+    this.smoothYaw = 0
+    this.smoothRoll = 0
+    this.deviationFrames = 0
+    this.currentDirection = 'CENTER'
   }
 
   public getWarningCount(): number {
@@ -460,37 +468,57 @@ export class EyeTrackerEngine {
       const nose = primaryFace[1]
       const forehead = primaryFace[10]
       const chin = primaryFace[152]
-      const eyeL = primaryFace[33]
-      const eyeR = primaryFace[263]
 
-      // 1. Roll: Angle between eyes
-      const dX = eyeR.x - eyeL.x
-      const dY = eyeR.y - eyeL.y
-      const rawRoll = Math.round(Math.atan2(dY, dX) * (180 / Math.PI))
+      // Rigid facial landmarks for cranial pose (landmarks 33 & 263 represent outer eye corners)
+      const eyeCornerA = primaryFace[33]
+      const eyeCornerB = primaryFace[263]
+
+      const vW = this.videoElement?.videoWidth || 640
+      const vH = this.videoElement?.videoHeight || 480
+
+      // Guarantee screen-relative left-to-right orientation regardless of camera mirroring/flip
+      // This completely prevents 180°/-180° inverted angle bugs on virtual/mobile camera drivers
+      const leftEyeOnScreen = eyeCornerA.x <= eyeCornerB.x ? eyeCornerA : eyeCornerB
+      const rightEyeOnScreen = eyeCornerA.x <= eyeCornerB.x ? eyeCornerB : eyeCornerA
+
+      // 1. Roll: Angle between eyes in PIXEL space (aspect-ratio corrected to prevent false tilts)
+      const pixelDX = (rightEyeOnScreen.x - leftEyeOnScreen.x) * vW
+      const pixelDY = (rightEyeOnScreen.y - leftEyeOnScreen.y) * vH
+      const rawRoll = Math.round(Math.atan2(pixelDY, pixelDX) * (180 / Math.PI))
 
       // 2. Yaw: Horizontal turn ratio
-      const distToLeft = Math.abs(nose.x - eyeL.x)
-      const distToRight = Math.abs(eyeR.x - nose.x)
+      const distToLeft = Math.abs(nose.x - leftEyeOnScreen.x)
+      const distToRight = Math.abs(rightEyeOnScreen.x - nose.x)
       const yawRatio = (distToRight - distToLeft) / Math.max(0.01, distToRight + distToLeft)
-      const rawYaw = Math.round(yawRatio * 75)
+      const rawYaw = Math.round(yawRatio * 60)
 
-      // 3. Pitch: Vertical tilt ratio
-      const noseToForehead = Math.abs(nose.y - forehead.y)
-      const noseToChin = Math.abs(chin.y - nose.y)
-      const pitchRatio = (noseToForehead - noseToChin * 0.95) / Math.max(0.01, noseToForehead + noseToChin)
-      const rawPitch = Math.round(pitchRatio * 90)
+      // 3. Pitch: Vertical tilt ratio (aspect-ratio scaled)
+      const noseToForehead = Math.abs(nose.y - forehead.y) * vH
+      const noseToChin = Math.abs(chin.y - nose.y) * vH
+      const totalFaceH = Math.max(1, noseToForehead + noseToChin)
+      const pitchRatio = (noseToForehead - noseToChin * 0.92) / totalFaceH
+      const rawPitch = Math.round(pitchRatio * 70)
 
-      // Auto-Zero baseline calibration
+      // Auto-Zero baseline calibration (immediate zero on first frame, refined over 20 steady frames)
       if (!this.calibrated) {
-        this.sumPitch += rawPitch
-        this.sumYaw += rawYaw
-        this.sumRoll += rawRoll
-        this.calibrationFrames++
-        if (this.calibrationFrames >= 12) {
-          this.baselinePitch = this.sumPitch / this.calibrationFrames
-          this.baselineYaw = this.sumYaw / this.calibrationFrames
-          this.baselineRoll = this.sumRoll / this.calibrationFrames
-          this.calibrated = true
+        if (this.calibrationFrames === 0) {
+          // Zero immediately to current pose so there is zero initial jump/spike
+          this.baselinePitch = rawPitch
+          this.baselineYaw = rawYaw
+          this.baselineRoll = rawRoll
+        }
+
+        if (Math.abs(rawRoll - this.baselineRoll) < 30 && Math.abs(rawYaw - this.baselineYaw) < 30) {
+          this.sumPitch += rawPitch
+          this.sumYaw += rawYaw
+          this.sumRoll += rawRoll
+          this.calibrationFrames++
+          if (this.calibrationFrames >= 20) {
+            this.baselinePitch = Math.round(this.sumPitch / this.calibrationFrames)
+            this.baselineYaw = Math.round(this.sumYaw / this.calibrationFrames)
+            this.baselineRoll = Math.round(this.sumRoll / this.calibrationFrames)
+            this.calibrated = true
+          }
         }
       }
 
@@ -498,9 +526,9 @@ export class EyeTrackerEngine {
       const calibratedYaw = Math.round(rawYaw - this.baselineYaw)
       const calibratedRoll = Math.round(rawRoll - this.baselineRoll)
 
-      this.smoothPitch = Math.round(this.smoothPitch * 0.65 + calibratedPitch * 0.35)
-      this.smoothYaw = Math.round(this.smoothYaw * 0.65 + calibratedYaw * 0.35)
-      this.smoothRoll = Math.round(this.smoothRoll * 0.65 + calibratedRoll * 0.35)
+      this.smoothPitch = Math.round(this.smoothPitch * 0.70 + calibratedPitch * 0.30)
+      this.smoothYaw = Math.round(this.smoothYaw * 0.70 + calibratedYaw * 0.30)
+      this.smoothRoll = Math.round(this.smoothRoll * 0.70 + calibratedRoll * 0.30)
 
       // MULTIPLE FACES DETECTION
       let secondaryFaceBox: { x: number; y: number; width: number; height: number } | undefined = undefined
@@ -548,31 +576,43 @@ export class EyeTrackerEngine {
         if (this.foreignObjectFrames > 0) this.foreignObjectFrames--
       }
 
-      // MULTI-SIGNAL DECISION LOGIC
+      // MULTI-SIGNAL DECISION LOGIC WITH HYSTERESIS & NATURAL ERGONOMIC TOLERANCES
       let direction: GazeDirection = 'CENTER'
 
       // Priority 1: Multi-Person Intruder
       if (faceCount > 1) {
         direction = 'MULTIPLE_FACES'
       }
-      // Priority 2: Smartphone or Foreign Object Detected (Immediate high priority!)
+      // Priority 2: Smartphone or Foreign Object Detected
       else if (isPhoneDetected || this.foreignObjectFrames >= 3) {
         direction = 'FOREIGN_OBJECT'
       }
-      // Priority 3: Looking Down at Lap / Phone (Pitch >= 20°)
-      else if (this.smoothPitch >= 20) {
+      // Priority 3: Looking Down at Lap / Phone (Enter at >= 28°, Exit at < 20°)
+      else if (
+        (this.currentDirection === 'LOOKING_DOWN' && this.smoothPitch >= 20) ||
+        this.smoothPitch >= 28
+      ) {
         direction = 'LOOKING_DOWN'
       }
-      // Priority 4: Turned Left (Yaw <= -20°)
-      else if (this.smoothYaw <= -20) {
+      // Priority 4: Turned Left (Enter at <= -28°, Exit at > -20°)
+      else if (
+        (this.currentDirection === 'LOOKING_LEFT' && this.smoothYaw <= -20) ||
+        this.smoothYaw <= -28
+      ) {
         direction = 'LOOKING_LEFT'
       }
-      // Priority 5: Turned Right (Yaw >= 20°)
-      else if (this.smoothYaw >= 20) {
+      // Priority 5: Turned Right (Enter at >= 28°, Exit at < 20°)
+      else if (
+        (this.currentDirection === 'LOOKING_RIGHT' && this.smoothYaw >= 20) ||
+        this.smoothYaw >= 28
+      ) {
         direction = 'LOOKING_RIGHT'
       }
-      // Priority 6: Severe Head Tilt (Roll >= 22° or <= -22°)
-      else if (Math.abs(this.smoothRoll) >= 22) {
+      // Priority 6: Severe Head Tilt (Enter at >= 28° or <= -28°, Exit at < 20°)
+      else if (
+        (this.currentDirection === 'HEAD_TILT' && Math.abs(this.smoothRoll) >= 20) ||
+        Math.abs(this.smoothRoll) >= 28
+      ) {
         direction = 'HEAD_TILT'
       } else {
         direction = 'CENTER'
@@ -799,29 +839,44 @@ export class EyeTrackerEngine {
     landmarks: TrackedLandmarks
   ) {
     const now = Date.now()
-    this.currentDirection = direction
     const isDeviated = direction !== 'CENTER'
 
     if (isDeviated) {
       this.deviationFrames++
-      const progress = Math.min(1, this.deviationFrames / this.requiredDeviationFrames)
-      const isSustained = this.deviationFrames >= this.requiredDeviationFrames
+    } else {
+      if (this.deviationFrames > 0) {
+        this.deviationFrames = Math.max(0, this.deviationFrames - 2)
+      }
+    }
 
-      this.onGazeUpdate?.({
-        direction,
-        confidence: Math.min(99, Math.round(88 + Math.abs(hOffset + vOffset) * 10)),
-        horizontalOffset: Math.round(hOffset * 100) / 100,
-        verticalOffset: Math.round(vOffset * 100) / 100,
-        faceDetected,
-        faceCount,
-        foreignObjectDetected,
-        foreignObjectLabel,
-        warningCount: this.warningCount,
-        isSustainedDeviation: isSustained,
-        deviationProgress: progress,
-        landmarks,
-      })
+    // Debounce transient 1-3 frame micro-jitters so UI stays completely stable
+    const reportedDirection =
+      direction === 'CENTER' || direction === 'FOREIGN_OBJECT' || direction === 'MULTIPLE_FACES'
+        ? direction
+        : this.deviationFrames >= 4
+        ? direction
+        : 'CENTER'
 
+    this.currentDirection = reportedDirection
+    const progress = Math.min(1, this.deviationFrames / this.requiredDeviationFrames)
+    const isSustained = this.deviationFrames >= this.requiredDeviationFrames
+
+    this.onGazeUpdate?.({
+      direction: reportedDirection,
+      confidence: Math.min(99, Math.round(88 + Math.abs(hOffset + vOffset) * 10)),
+      horizontalOffset: Math.round(hOffset * 100) / 100,
+      verticalOffset: Math.round(vOffset * 100) / 100,
+      faceDetected,
+      faceCount,
+      foreignObjectDetected,
+      foreignObjectLabel,
+      warningCount: this.warningCount,
+      isSustainedDeviation: isSustained,
+      deviationProgress: progress,
+      landmarks,
+    })
+
+    if (isDeviated) {
       // ZERO-TOLERANCE IMMEDIATE TERMINATION FOR FOREIGN OBJECT (SMARTPHONE)
       if (direction === 'FOREIGN_OBJECT') {
         // Sustained for 3-4 consecutive frames (~150-200ms) to ensure solid non-flicker detection
@@ -851,26 +906,6 @@ export class EyeTrackerEngine {
           this.onTerminated?.(reason)
         }
       }
-    } else {
-      if (this.deviationFrames > 0) {
-        this.deviationFrames = Math.max(0, this.deviationFrames - 2)
-      }
-      const progress = this.deviationFrames / this.requiredDeviationFrames
-
-      this.onGazeUpdate?.({
-        direction: 'CENTER',
-        confidence: 99,
-        horizontalOffset: 0,
-        verticalOffset: 0,
-        faceDetected: true,
-        faceCount,
-        foreignObjectDetected,
-        foreignObjectLabel: '',
-        warningCount: this.warningCount,
-        isSustainedDeviation: false,
-        deviationProgress: progress,
-        landmarks,
-      })
     }
   }
 }

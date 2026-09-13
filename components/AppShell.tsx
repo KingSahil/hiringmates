@@ -46,6 +46,7 @@ export function AppShell({ initialTab }: AppShellProps) {
     })()
   }, [loading, isAuthorized, tab, setTab])
 
+  // Sync initial tab with current URL route
   useEffect(() => {
     if (initialTab && tab !== initialTab) {
       const currentPath = window.location.pathname.toLowerCase()
@@ -57,18 +58,63 @@ export function AppShell({ initialTab }: AppShellProps) {
         (initialTab === 'recruiter' && currentPath.includes('recruiter')) ||
         (initialTab === 'home' && currentPath === '/')
       ) {
-        setTab(initialTab)
+        if (!loading && !isAuthorized && initialTab !== 'home' && initialTab !== 'recruiter') {
+          setTab('home')
+          if (typeof window !== 'undefined') {
+            window.history.replaceState(null, '', '/')
+          }
+        } else {
+          setTab(initialTab)
+        }
       }
     }
-  }, [initialTab, setTab, tab])
+  }, [initialTab, setTab, tab, loading, isAuthorized])
+
+  // If unauthorized and sitting on any protected tab, automatically reset to home
+  useEffect(() => {
+    if (!loading && !isAuthorized && tab !== 'home' && tab !== 'recruiter') {
+      setTab('home')
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+        window.history.replaceState(null, '', '/')
+      }
+    }
+  }, [loading, isAuthorized, tab, setTab])
 
   const currentTab = initialTab && tab === 'home' ? initialTab : tab
+  const isProtectedTab =
+    currentTab === 'hireme' ||
+    currentTab === 'codemates' ||
+    currentTab === 'mentorship' ||
+    currentTab === 'assessment'
+
+  // While auth session is resolving, show branded loader if attempting to access protected content
+  if (loading && isProtectedTab) {
+    return (
+      <main className="flex min-h-[calc(100vh-65px)] items-center justify-center bg-[#fffaf0] dark:bg-[#0c0d11]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border-3 border-[#171717] bg-[#ffd84d] shadow-[3px_3px_0_#171717] animate-pulse dark:border-[#2e323b] dark:shadow-[3px_3px_0_#000000]">
+            <img src="/brand-logo.png" alt="HiringMates" className="h-6 w-6 object-contain" />
+          </div>
+          <p className="font-mono text-xs font-black uppercase tracking-wider text-[#171717] dark:text-[#f4f4f7]">
+            Verifying credentials...
+          </p>
+        </div>
+      </main>
+    )
+  }
+
+  // If not logged in and not accessing recruiter portal, strictly render the Landing page
+  if (!isAuthorized && currentTab !== 'recruiter') {
+    return (
+      <main className="w-full">
+        <LandingContent />
+      </main>
+    )
+  }
 
   return (
     <main className="w-full">
-      {currentTab === 'home' && (
-        isAuthorized ? <AuthorizedHome /> : <LandingContent />
-      )}
+      {currentTab === 'home' && <AuthorizedHome />}
       {currentTab === 'hireme' && <HireMeContent />}
       {currentTab === 'codemates' && <CodeMatesContent />}
       {currentTab === 'mentorship' && <MentorshipMeetContent />}
