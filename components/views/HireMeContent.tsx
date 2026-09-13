@@ -13,6 +13,7 @@ import {
   FileCheck,
   History,
   Loader2,
+  Lock,
   LockKeyhole,
   Maximize,
   Mic,
@@ -207,7 +208,7 @@ The incident response server acts as an MCP server bridging AI diagnostic agents
 
 export function HireMeContent({ position, onComplete, onExit }: HireMeContentProps = {}) {
   const { user } = useAuth()
-  const { setTab } = useNavigation()
+  const { setTab, lockAssessment, unlockAssessment } = useNavigation()
   const { triggerRound2Notification, setActiveRole } = useNotifications()
   const [step, setStep] = useState<HireMeStep>(position ? 'profile' : 'invite')
   const stepRef = useRef<HireMeStep>(position ? 'profile' : 'invite')
@@ -233,9 +234,7 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
       : 'https://github.com/mayachen-dev'
   )
   const [candidateSkills, setCandidateSkills] = useState(() =>
-    position?.tags && position.tags.length > 0
-      ? position.tags.join(', ')
-      : 'React, TypeScript, Next.js, Node.js, PostgreSQL'
+    position?.tags?.length ? position.tags.join(', ') : 'TypeScript, Next.js, Architecture'
   )
 
   // Hardware & Proctoring verification state
@@ -263,6 +262,66 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
   const [showTabWarning, setShowTabWarning] = useState(false)
   const [isTerminated, setIsTerminated] = useState(false)
   const [terminationReason, setTerminationReason] = useState('')
+  const isTerminatedRef = useRef(false)
+  useEffect(() => {
+    isTerminatedRef.current = isTerminated
+  }, [isTerminated])
+
+  // Invalidate Assessment: immediately disqualifies candidate, stops hardware, submits zero-score to backend, and displays termination
+  const invalidateAssessment = useCallback((reason: string) => {
+    if (isTerminatedRef.current) return
+    isTerminatedRef.current = true
+    setIsTerminated(true)
+    setIsPaused(true)
+    setShowGazeWarningModal(false)
+    setShowTabWarning(false)
+    setTerminationReason(reason)
+
+    // Terminate and release active hardware feeds
+    if (cameraStream) {
+      try { cameraStream.getTracks().forEach((t) => t.stop()) } catch {}
+    }
+    if (micStream) {
+      try { micStream.getTracks().forEach((t) => t.stop()) } catch {}
+    }
+    if (screenStream) {
+      try { screenStream.getTracks().forEach((t) => t.stop()) } catch {}
+    }
+    setCameraReady(false)
+    setMicReady(false)
+    setScreenReady(false)
+
+    // Release global lockdown
+    unlockAssessment()
+
+    // Record 0 score and failed attempt on server for position assessments
+    if (position && positionAttemptIdRef.current) {
+      fetch(`/api/portal/attempts/${positionAttemptIdRef.current}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: [] }),
+      }).catch(() => {})
+      setAttemptScore(0)
+      setAttemptPassed(false)
+      onComplete?.({ score: 0, passed: false })
+    }
+
+    setStep('results')
+  }, [cameraStream, micStream, screenStream, position, onComplete, unlockAssessment])
+
+  // Assessment Global Lockdown Hook: locks site navigation whenever the test is active
+  useEffect(() => {
+    if (step === 'assessment' && !isTerminated) {
+      lockAssessment((reason) => {
+        invalidateAssessment(reason || 'Assessment Invalidated: Navigation violation detected during active examination.')
+      })
+    } else {
+      unlockAssessment()
+    }
+    return () => {
+      unlockAssessment()
+    }
+  }, [step, isTerminated, lockAssessment, unlockAssessment, invalidateAssessment])
 
   // Per-question countdown timers. MCQs get MCQ_SECONDS; theory is untimed.
   const [questionTimes, setQuestionTimes] = useState<Record<number, number>>(
@@ -347,16 +406,20 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
     return () => clearInterval(interval)
   }, [isReplaying, replaySpeed])
 
-  // Fullscreen listener
+  // Fullscreen listener — exiting fullscreen during active examination invalidates the attempt
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
+      const inFullscreen = !!document.fullscreenElement
+      setIsFullscreen(inFullscreen)
+      if (stepRef.current === 'assessment' && !inFullscreen && !isTerminatedRef.current) {
+        invalidateAssessment('Assessment Invalidated: Fullscreen mode was exited during active examination.')
+      }
     }
     document.addEventListener('fullscreenchange', handleFullscreenChange)
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange)
     }
-  }, [])
+  }, [invalidateAssessment])
 
   // Enumerate video input devices
   const enumerateCameras = async () => {
@@ -558,14 +621,7 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
           setScreenStream(null)
           // If active assessment is underway, immediately terminate session
           if (stepRef.current === 'assessment') {
-            setIsTerminated(true)
-            setIsPaused(true)
-            setTerminationReason('Screen sharing was stopped or disconnected during active proctoring session.')
-            if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
-            if (micStream) micStream.getTracks().forEach((t) => t.stop())
-            setCameraReady(false)
-            setMicReady(false)
-            setStep('results')
+            invalidateAssessment('Screen sharing was stopped or disconnected during active proctoring session.')
           }
         }
       }
@@ -588,14 +644,7 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
     }
     // If active assessment is underway, stopping screen share immediately terminates session
     if (stepRef.current === 'assessment') {
-      setIsTerminated(true)
-      setIsPaused(true)
-      setTerminationReason('Screen sharing was stopped during active proctoring session.')
-      if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
-      if (micStream) micStream.getTracks().forEach((t) => t.stop())
-      setCameraReady(false)
-      setMicReady(false)
-      setStep('results')
+      invalidateAssessment('Screen sharing was stopped during active proctoring session.')
     }
   }
 
@@ -832,13 +881,6 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
 
         // ZERO TOLERANCE: Immediate cancellation for smartphone / foreign object
         if (direction === 'FOREIGN_OBJECT') {
-          setIsTerminated(true)
-          setShowGazeWarningModal(false)
-          setShowTabWarning(false)
-          setIsPaused(true)
-          setTerminationReason(
-            'HIRING PROCESS CANCELLED: An unauthorized smartphone / foreign device was identified in the camera frame by AI Vision Proctoring. The candidate is disqualified from the hiring process.'
-          )
           setSecurityViolations((prev) => [
             {
               timestamp: new Date().toLocaleTimeString(),
@@ -848,13 +890,9 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
             },
             ...prev,
           ])
-          if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
-          if (micStream) micStream.getTracks().forEach((t) => t.stop())
-          if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
-          setCameraReady(false)
-          setMicReady(false)
-          setScreenReady(false)
-          setStep('results')
+          invalidateAssessment(
+            'HIRING PROCESS CANCELLED: An unauthorized smartphone / foreign device was identified in the camera frame by AI Vision Proctoring. The candidate is disqualified from the hiring process.'
+          )
           return
         }
 
@@ -880,12 +918,6 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
       },
       onTerminated: (reason) => {
         if (!isAssessment) return
-        setIsTerminated(true)
-        setShowGazeWarningModal(false)
-        setShowTabWarning(false)
-        setIsPaused(true)
-        setTerminationReason(reason)
-
         setSecurityViolations((prev) => [
           {
             timestamp: new Date().toLocaleTimeString(),
@@ -895,15 +927,7 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
           },
           ...prev,
         ])
-
-        if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
-        if (micStream) micStream.getTracks().forEach((t) => t.stop())
-        if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
-        setCameraReady(false)
-        setMicReady(false)
-        setScreenReady(false)
-
-        setStep('results')
+        invalidateAssessment(reason)
       },
     })
 
@@ -1021,7 +1045,9 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
   // Run Codeforces AST Winnowing Plagiarism evaluation whenever entering admin or results
   useEffect(() => {
     if (step === 'admin' || step === 'results') {
-      const text = answers[1] ?? activeQuestions[1].defaultValue ?? ''
+      const text = typeof theoryText === 'string' && theoryText.length > 0
+        ? theoryText
+        : (typeof answers[1] === 'string' ? answers[1] : (typeof answers[0] === 'string' ? answers[0] : ''))
       const vsChatGPT = winnowingEngineRef.current.compareSubmissions(
         text,
         LLM_BENCHMARK_SOLUTIONS.chatgpt_mcp_response,
@@ -1103,21 +1129,8 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
             setIsPaused(true)
             setShowTabWarning(true)
           } else if (nextCount >= 2) {
-            // Second tab switch: Terminate the session immediately!
-            setIsTerminated(true)
-            setShowTabWarning(false)
-            setIsPaused(true)
-            setTerminationReason('Multiple tab switches detected during active proctoring session.')
-
-            // Stop all active hardware streams
-            if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop())
-            if (micStream) micStream.getTracks().forEach((t) => t.stop())
-            if (screenStream) screenStream.getTracks().forEach((t) => t.stop())
-            setCameraReady(false)
-            setMicReady(false)
-            setScreenReady(false)
-
-            setStep('results')
+            // Second tab switch: Terminate and invalidate the session immediately!
+            invalidateAssessment('Multiple tab switches detected during active proctoring session.')
           }
           return nextCount
         })
@@ -1241,19 +1254,38 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
               { id: 'profile', label: 'Profile' },
               { id: 'check', label: 'System' },
               { id: 'assessment', label: 'Assessment' },
-            ].map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setStep(item.id as HireMeStep)}
-                className={`cursor-pointer rounded-xl border border-[#171717] px-3 py-1 text-xs font-black uppercase transition-all dark:border-[#2e323b] ${
-                  step === item.id
-                    ? 'bg-[#171717] text-[#fffaf0] shadow-[2px_2px_0_#39d5c8] dark:bg-[#39d5c8] dark:text-[#171717] dark:shadow-[2px_2px_0_#000000]'
-                    : 'bg-white text-[#171717] hover:bg-[#e0fbf9] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:hover:bg-[#20242e]'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
+            ].map((item) => {
+              const isLocked = step === 'assessment' && item.id !== 'assessment'
+              return (
+                <button
+                  key={item.id}
+                  disabled={isLocked || step === 'results'}
+                  onClick={() => {
+                    if (step === 'assessment') {
+                      invalidateAssessment(`Assessment Invalidated: Attempted to navigate to "${item.label}" during active test.`)
+                      return
+                    }
+                    setStep(item.id as HireMeStep)
+                  }}
+                  className={`rounded-xl border border-[#171717] px-3 py-1 text-xs font-black uppercase transition-all dark:border-[#2e323b] ${
+                    isLocked
+                      ? 'cursor-not-allowed opacity-35 bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500 pointer-events-none'
+                      : step === item.id
+                      ? 'bg-[#171717] text-[#fffaf0] shadow-[2px_2px_0_#39d5c8] dark:bg-[#39d5c8] dark:text-[#171717] dark:shadow-[2px_2px_0_#000000]'
+                      : 'bg-white text-[#171717] hover:bg-[#e0fbf9] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:hover:bg-[#20242e]'
+                  }`}
+                >
+                  {isLocked ? (
+                    <span className="flex items-center gap-1">
+                      <Lock className="h-3 w-3" />
+                      {item.label}
+                    </span>
+                  ) : (
+                    item.label
+                  )}
+                </button>
+              )
+            })}
           </div>
         </div>
 
@@ -2164,7 +2196,7 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
                         </button>
                       ) : (
                         <button
-                          onClick={() => setStep('results')}
+                          onClick={finishAssessment}
                           className="btn-neo btn-neo-lemon py-1.5 text-xs"
                         >
                           Submit Assessment <Send className="h-3 w-3" />
@@ -2526,26 +2558,40 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
                 </div>
 
                 <div className="mt-6 flex justify-center gap-2">
-                  <button
-                    onClick={() => {
-                      setIsTerminated(false)
-                      setTabViolations(0)
-                      setGazeWarnings(0)
-                      setShowGazeWarningModal(false)
-                      if (eyeTrackerRef.current) eyeTrackerRef.current.resetWarnings()
-                      setQuestionTimes({ 0: 2 * 60, 1: 10 * 60 })
-                      setStep('invite')
-                    }}
-                    className="btn-neo btn-neo-lemon py-2 text-xs"
-                  >
-                    Restart Brief
-                  </button>
-                  <button
-                    onClick={() => setTab('codemates')}
-                    className="btn-neo btn-neo-berry py-2 text-xs"
-                  >
-                    Open CodeMates
-                  </button>
+                  {position ? (
+                    <button
+                      onClick={() => {
+                        if (onExit) onExit()
+                        else setTab('positions')
+                      }}
+                      className="btn-neo btn-neo-paper py-2 text-xs"
+                    >
+                      Return to Marketplace
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => {
+                          setIsTerminated(false)
+                          setTabViolations(0)
+                          setGazeWarnings(0)
+                          setShowGazeWarningModal(false)
+                          if (eyeTrackerRef.current) eyeTrackerRef.current.resetWarnings()
+                          setQuestionTimes({ 0: 2 * 60, 1: 10 * 60 })
+                          setStep('invite')
+                        }}
+                        className="btn-neo btn-neo-lemon py-2 text-xs"
+                      >
+                        Restart Practice Brief
+                      </button>
+                      <button
+                        onClick={() => setTab('codemates')}
+                        className="btn-neo btn-neo-berry py-2 text-xs"
+                      >
+                        Open CodeMates
+                      </button>
+                    </>
+                  )}
                 </div>
               </>
             ) : (
