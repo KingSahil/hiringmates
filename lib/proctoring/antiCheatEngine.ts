@@ -68,7 +68,7 @@ export class CodeforcesWinnowingEngine {
     flags: AICommentFlagClient[]
     aiScore: number
   } {
-    if (!source) return { emojis: [], flags: [], aiScore: 0 }
+    if (!source || typeof source !== 'string') return { emojis: [], flags: [], aiScore: 0 }
 
     const emojis: string[] = []
     const flags: AICommentFlagClient[] = []
@@ -255,9 +255,11 @@ export class CodeforcesWinnowingEngine {
     targetCode: string,
     targetName = 'Target'
   ): PlagiarismResult {
-    const { emojis, flags, aiScore } = this.detectAICodeMarkers(candidateCode)
-    const fp1 = this.generateFingerprints(candidateCode)
-    const fp2 = this.generateFingerprints(targetCode)
+    const code1 = typeof candidateCode === 'string' ? candidateCode : String(candidateCode ?? '')
+    const code2 = typeof targetCode === 'string' ? targetCode : String(targetCode ?? '')
+    const { emojis, flags, aiScore } = this.detectAICodeMarkers(code1)
+    const fp1 = this.generateFingerprints(code1)
+    const fp2 = this.generateFingerprints(code2)
 
     if (fp1.size === 0 || fp2.size === 0) {
       const isAI = aiScore >= 45 || emojis.length > 0

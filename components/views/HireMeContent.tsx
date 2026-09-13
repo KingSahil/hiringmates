@@ -1021,7 +1021,9 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
   // Run Codeforces AST Winnowing Plagiarism evaluation whenever entering admin or results
   useEffect(() => {
     if (step === 'admin' || step === 'results') {
-      const text = answers[1] ?? activeQuestions[1].defaultValue ?? ''
+      const text = typeof theoryText === 'string' && theoryText.length > 0
+        ? theoryText
+        : (typeof answers[1] === 'string' ? answers[1] : (typeof answers[0] === 'string' ? answers[0] : ''))
       const vsChatGPT = winnowingEngineRef.current.compareSubmissions(
         text,
         LLM_BENCHMARK_SOLUTIONS.chatgpt_mcp_response,
@@ -2164,7 +2166,7 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
                         </button>
                       ) : (
                         <button
-                          onClick={() => setStep('results')}
+                          onClick={finishAssessment}
                           className="btn-neo btn-neo-lemon py-1.5 text-xs"
                         >
                           Submit Assessment <Send className="h-3 w-3" />
