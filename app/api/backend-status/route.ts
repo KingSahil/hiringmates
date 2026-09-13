@@ -1,4 +1,4 @@
-﻿import { NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { backendUrl } from '@/lib/backend'
 
 export const dynamic = 'force-dynamic'
@@ -18,11 +18,21 @@ export async function GET() {
       elapsed_ms: elapsed,
       backend_health: data,
     })
-  } catch (err: unknown) {
+  } catch (err: any) {
     return NextResponse.json(
       {
         configured_url: envValue,
-        error: err instanceof Error ? err.message : String(err),
+        error: err?.message,
+        cause: err?.cause
+          ? {
+              name: err.cause.name,
+              message: err.cause.message,
+              code: err.cause.code,
+              errno: err.cause.errno,
+              syscall: err.cause.syscall,
+              hostname: err.cause.hostname,
+            }
+          : null,
       },
       { status: 502 },
     )
