@@ -54,7 +54,18 @@ const RTC_CONFIG: RTCConfiguration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelay',
+      credential: 'openrelay',
+    },
   ],
+  iceCandidatePoolSize: 10,
 }
 
 export function MentorshipMeetContent() {
@@ -191,6 +202,8 @@ class DistributedTaskWorker {
   const localVideoRef = useRef<HTMLVideoElement | null>(null)
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null)
   const screenVideoRef = useRef<HTMLVideoElement | null>(null)
+  const pipRemoteVideoRef = useRef<HTMLVideoElement | null>(null)
+  const pipLocalVideoRef = useRef<HTMLVideoElement | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number | null>(null)
@@ -199,6 +212,19 @@ class DistributedTaskWorker {
   const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([])
   const channelRef = useRef<any>(null)
   const makingOfferRef = useRef<boolean>(false)
+  const localStreamRef = useRef<MediaStream | null>(null)
+  const remoteStreamRef = useRef<MediaStream | null>(null)
+
+  const isMentorRef = useRef(isMentor)
+  isMentorRef.current = isMentor
+  const myNameRef = useRef(myName)
+  myNameRef.current = myName
+  const myRoleLabelRef = useRef(myRoleLabel)
+  myRoleLabelRef.current = myRoleLabel
+  const isCameraOnRef = useRef(isCameraOn)
+  isCameraOnRef.current = isCameraOn
+  const isMicOnRef = useRef(isMicOn)
+  isMicOnRef.current = isMicOn
 
   // 1. Initialize Local Media Stream (Camera & Mic)
   useEffect(() => {
@@ -216,11 +242,17 @@ class DistributedTaskWorker {
           audio: true,
         })
 
+        localStreamRef.current = stream
         setLocalStream(stream)
         setMediaError(null)
 
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream
+          localVideoRef.current.play().catch(() => {})
+        }
+        if (pipLocalVideoRef.current) {
+          pipLocalVideoRef.current.srcObject = stream
+          pipLocalVideoRef.current.play().catch(() => {})
         }
 
         // Setup audio visualizer for local mic
@@ -264,6 +296,7 @@ class DistributedTaskWorker {
       if (stream) {
         stream.getTracks().forEach((t) => t.stop())
       }
+      localStreamRef.current = null
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current)
       }
@@ -273,20 +306,34 @@ class DistributedTaskWorker {
     }
   }, [])
 
-  // 2. Setup WebRTC Peer Connection Factory
+  // 2. Setup WebRTC Peer Connection Factory (Stable, resilient to re-renders)
   const getOrCreatePeerConnection = useCallback(() => {
     if (peerConnectionRef.current) return peerConnectionRef.current
 
     const pc = new RTCPeerConnection(RTC_CONFIG)
     peerConnectionRef.current = pc
 
-    // Add local tracks if available
-    if (localStream) {
-      localStream.getTracks().forEach((track) => {
-        try {
-          pc.addTrack(track, localStream)
-        } catch {
-          // ignore duplicate track
+    // Add audio and video transceivers immediately to negotiate both directions upfront
+    try {
+      pc.addTransceiver('audio', { direction: 'sendrecv' })
+      pc.addTransceiver('video', { direction: 'sendrecv' })
+    } catch (err) {
+      console.warn('Transceiver allocation notice:', err)
+    }
+
+    // Add local tracks if stream is already available
+    if (localStreamRef.current) {
+      const senders = pc.getSenders()
+      localStreamRef.current.getTracks().forEach((track) => {
+        const existing = senders.find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind)
+        if (existing) {
+          existing.replaceTrack(track).catch(() => {})
+        } else {
+          try {
+            pc.addTrack(track, localStreamRef.current!)
+          } catch {
+            // ignore duplicate track
+          }
         }
       })
     }
@@ -302,16 +349,28 @@ class DistributedTaskWorker {
     }
 
     pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        const stream = event.streams[0]
-        setRemoteStream(stream)
-        setRemoteConnected(true)
-        setConnectionStatus('connected')
-
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = stream
-          remoteVideoRef.current.play().catch(() => {})
+      let stream = event.streams?.[0]
+      if (!stream) {
+        if (!remoteStreamRef.current) {
+          remoteStreamRef.current = new MediaStream()
         }
+        remoteStreamRef.current.addTrack(event.track)
+        stream = remoteStreamRef.current
+      } else {
+        remoteStreamRef.current = stream
+      }
+
+      setRemoteStream(stream)
+      setRemoteConnected(true)
+      setConnectionStatus('connected')
+
+      if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== stream) {
+        remoteVideoRef.current.srcObject = stream
+        remoteVideoRef.current.play().catch(() => {})
+      }
+      if (pipRemoteVideoRef.current && pipRemoteVideoRef.current.srcObject !== stream) {
+        pipRemoteVideoRef.current.srcObject = stream
+        pipRemoteVideoRef.current.play().catch(() => {})
       }
     }
 
@@ -331,16 +390,17 @@ class DistributedTaskWorker {
     }
 
     return pc
-  }, [localStream, clientId])
+  }, [clientId])
 
-  // 3. Keep local stream tracks synced to peer connection
+  // 3. Keep local stream tracks synced to peer connection without tearing it down
   useEffect(() => {
-    if (!localStream || !peerConnectionRef.current) return
+    localStreamRef.current = localStream
+    if (!peerConnectionRef.current || !localStream) return
     const pc = peerConnectionRef.current
     const senders = pc.getSenders()
 
     localStream.getTracks().forEach((track) => {
-      const existing = senders.find((s) => s.track?.kind === track.kind)
+      const existing = senders.find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind)
       if (existing) {
         existing.replaceTrack(track).catch(() => {})
       } else {
@@ -403,7 +463,7 @@ class DistributedTaskWorker {
     }
   }, [isScreenSharing, screenStream, localStream, isCameraOn])
 
-  // 6. Supabase Realtime WebRTC Signaling Channel
+  // 6. Supabase Realtime WebRTC Signaling Channel (Permanent connection for duration of call)
   useEffect(() => {
     const supabase = getSupabaseBrowserClient()
     const channelTopic = `mentorship-room-${meetingId}`
@@ -415,10 +475,7 @@ class DistributedTaskWorker {
     const createAndSendOffer = async (pc: RTCPeerConnection) => {
       try {
         makingOfferRef.current = true
-        const offer = await pc.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: true,
-        })
+        const offer = await pc.createOffer()
         await pc.setLocalDescription(offer)
         channel.send({
           type: 'broadcast',
@@ -426,8 +483,9 @@ class DistributedTaskWorker {
           payload: {
             sdp: pc.localDescription,
             senderId: clientId,
-            senderName: myName,
-            senderRole: myRoleLabel,
+            senderName: myNameRef.current,
+            senderRole: myRoleLabelRef.current,
+            isMentor: isMentorRef.current,
           },
         })
       } catch (err) {
@@ -443,16 +501,25 @@ class DistributedTaskWorker {
         if (!payload || payload.clientId === clientId) return
         if (payload.name) setRemotePeerName(payload.name)
         if (payload.role) setRemotePeerRole(payload.role)
+        if (typeof payload.isCameraOn === 'boolean') setPeerCameraOn(payload.isCameraOn)
+        if (typeof payload.isMicOn === 'boolean') setPeerMicOn(payload.isMicOn)
 
         // Greet back with our presence
         channel.send({
           type: 'broadcast',
           event: 'webrtc-peer-ready',
-          payload: { clientId, name: myName, role: myRoleLabel, isCameraOn, isMicOn },
+          payload: {
+            clientId,
+            name: myNameRef.current,
+            role: myRoleLabelRef.current,
+            isMentor: isMentorRef.current,
+            isCameraOn: isCameraOnRef.current,
+            isMicOn: isMicOnRef.current,
+          },
         })
 
         // Deterministic initiator: Mentor initiates, or compare clientIds if roles match
-        const shouldInitiate = isMentor || (!payload.isMentor && clientId > payload.clientId)
+        const shouldInitiate = isMentorRef.current || (!payload.isMentor && clientId > payload.clientId)
         if (shouldInitiate) {
           const pc = getOrCreatePeerConnection()
           setConnectionStatus('connecting')
@@ -467,14 +534,14 @@ class DistributedTaskWorker {
         if (typeof payload.isCameraOn === 'boolean') setPeerCameraOn(payload.isCameraOn)
         if (typeof payload.isMicOn === 'boolean') setPeerMicOn(payload.isMicOn)
 
-        const shouldInitiate = isMentor || (!payload.isMentor && clientId > payload.clientId)
+        const shouldInitiate = isMentorRef.current || (!payload.isMentor && clientId > payload.clientId)
         if (shouldInitiate) {
           const pc = getOrCreatePeerConnection()
           setConnectionStatus('connecting')
           await createAndSendOffer(pc)
         }
       })
-      // Incoming SDP Offer
+      // Incoming SDP Offer with W3C Perfect Negotiation (rollback on glare)
       .on('broadcast', { event: 'webrtc-offer' }, async ({ payload }: any) => {
         if (!payload || payload.senderId === clientId || !payload.sdp) return
         if (payload.senderName) setRemotePeerName(payload.senderName)
@@ -482,6 +549,16 @@ class DistributedTaskWorker {
 
         try {
           const pc = getOrCreatePeerConnection()
+          const isPolite = !isMentorRef.current || (Boolean(payload.isMentor) && clientId < payload.senderId)
+          const offerCollision = pc.signalingState !== 'stable' || makingOfferRef.current
+
+          if (offerCollision) {
+            if (!isPolite) {
+              return // Impolite peer ignores colliding offer
+            }
+            await pc.setLocalDescription({ type: 'rollback' })
+          }
+
           setConnectionStatus('connecting')
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
 
@@ -497,7 +574,7 @@ class DistributedTaskWorker {
           channel.send({
             type: 'broadcast',
             event: 'webrtc-answer',
-            payload: { sdp: pc.localDescription, senderId: clientId, senderName: myName },
+            payload: { sdp: pc.localDescription, senderId: clientId, senderName: myNameRef.current },
           })
         } catch (err) {
           console.warn('Error handling WebRTC offer:', err)
@@ -510,12 +587,14 @@ class DistributedTaskWorker {
 
         try {
           const pc = getOrCreatePeerConnection()
-          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
+          if (pc.signalingState === 'have-local-offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
 
-          // Drain queued ICE candidates
-          while (pendingCandidatesRef.current.length > 0) {
-            const cand = pendingCandidatesRef.current.shift()
-            if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand))
+            // Drain queued ICE candidates
+            while (pendingCandidatesRef.current.length > 0) {
+              const cand = pendingCandidatesRef.current.shift()
+              if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand))
+            }
           }
         } catch (err) {
           console.warn('Error handling WebRTC answer:', err)
@@ -549,14 +628,13 @@ class DistributedTaskWorker {
         setRemoteStream(null)
         setRemoteConnected(false)
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null
+        if (pipRemoteVideoRef.current) pipRemoteVideoRef.current.srcObject = null
       })
       // In-Call Chat Messages
       .on('broadcast', { event: 'chat-message' }, ({ payload }: any) => {
         if (payload) {
           setChatMessages((prev) => [...prev, payload])
-          if (activeSidePanel !== 'chat') {
-            setUnreadChatCount((c) => c + 1)
-          }
+          setUnreadChatCount((c) => c + 1)
         }
       })
       // Floating Emoji Reactions
@@ -577,7 +655,14 @@ class DistributedTaskWorker {
           channel.send({
             type: 'broadcast',
             event: 'webrtc-join',
-            payload: { clientId, name: myName, role: myRoleLabel, isMentor, isCameraOn, isMicOn },
+            payload: {
+              clientId,
+              name: myNameRef.current,
+              role: myRoleLabelRef.current,
+              isMentor: isMentorRef.current,
+              isCameraOn: isCameraOnRef.current,
+              isMicOn: isMicOnRef.current,
+            },
           })
         }
       })
@@ -599,7 +684,7 @@ class DistributedTaskWorker {
       channelRef.current = null
       supabase.removeChannel(channel)
     }
-  }, [meetingId, clientId, myName, myRoleLabel, isMentor, getOrCreatePeerConnection, isCameraOn, isMicOn, activeSidePanel])
+  }, [meetingId, clientId, getOrCreatePeerConnection])
 
   // Re-attach camera stream to local video ref
   useEffect(() => {
@@ -808,6 +893,18 @@ class DistributedTaskWorker {
 
   return (
     <div className="relative flex h-[calc(100vh-65px)] w-full flex-col overflow-hidden bg-[#0c0d11] text-[#f4f4f7] select-none font-sans">
+      {/* Background persistent audio sink for incoming remote audio across all modes */}
+      <audio
+        ref={(el) => {
+          if (el && remoteStream && el.srcObject !== remoteStream) {
+            el.srcObject = remoteStream
+            el.play().catch(() => {})
+          }
+        }}
+        autoPlay
+        playsInline
+      />
+
       {/* Floating Animated Emoji Reactions */}
       <div className="pointer-events-none absolute inset-0 z-50 overflow-hidden">
         {floatingReactions.map((reaction) => (
@@ -933,54 +1030,57 @@ class DistributedTaskWorker {
               <div className="flex w-64 flex-col gap-3 shrink-0">
                 {/* Peer PIP */}
                 <div className="relative aspect-video w-full rounded-xl border-2 border-[#2e323b] bg-[#181b22] overflow-hidden">
-                  {peerCameraOn && remoteStream ? (
-                    <video
-                      ref={(el) => {
-                        if (el && remoteStream && el.srcObject !== remoteStream) {
-                          el.srcObject = remoteStream
-                          el.play().catch(() => {})
-                        }
-                      }}
-                      autoPlay
-                      playsInline
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-indigo-900/60 to-purple-950/60">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/20 bg-[#39d5c8] text-base font-black text-black">
-                        {peerName.slice(0, 1)}
-                      </div>
+                  <video
+                    ref={(el) => {
+                      pipRemoteVideoRef.current = el
+                      if (el && remoteStream && el.srcObject !== remoteStream) {
+                        el.srcObject = remoteStream
+                        el.play().catch(() => {})
+                      }
+                    }}
+                    autoPlay
+                    playsInline
+                    className={`h-full w-full object-cover transition-opacity duration-300 ${
+                      peerCameraOn && remoteStream ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                    }`}
+                  />
+                  <div className={`absolute inset-0 flex items-center justify-center bg-gradient-to-br from-indigo-900/60 to-purple-950/60 transition-opacity duration-300 ${
+                    peerCameraOn && remoteStream ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                  }`}>
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/20 bg-[#39d5c8] text-base font-black text-black">
+                      {peerName.slice(0, 1)}
                     </div>
-                  )}
-                  <span className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white">
+                  </div>
+                  <span className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white z-20">
                     {peerName}
                   </span>
                 </div>
 
                 {/* Local PIP */}
                 <div className="relative aspect-video w-full rounded-xl border-2 border-[#2e323b] bg-[#181b22] overflow-hidden">
-                  {isCameraOn && localStream ? (
-                    <video
-                      ref={(el) => {
-                        localVideoRef.current = el
-                        if (el && localStream && el.srcObject !== localStream) {
-                          el.srcObject = localStream
-                          el.play().catch(() => {})
-                        }
-                      }}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="h-full w-full object-cover -scale-x-100"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-[#15171c]">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-[#ffd84d] text-base font-black text-black">
-                        {myName.slice(0, 1)}
-                      </div>
+                  <video
+                    ref={(el) => {
+                      pipLocalVideoRef.current = el
+                      if (el && localStream && el.srcObject !== localStream) {
+                        el.srcObject = localStream
+                        el.play().catch(() => {})
+                      }
+                    }}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`h-full w-full object-cover -scale-x-100 transition-opacity duration-300 ${
+                      isCameraOn && localStream ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                    }`}
+                  />
+                  <div className={`absolute inset-0 flex items-center justify-center bg-[#15171c] transition-opacity duration-300 ${
+                    isCameraOn && localStream ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                  }`}>
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-[#ffd84d] text-base font-black text-black">
+                      {myName.slice(0, 1)}
                     </div>
-                  )}
-                  <span className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white">
+                  </div>
+                  <span className="absolute bottom-2 left-2 rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white z-20">
                     You ({myName})
                   </span>
                 </div>
@@ -998,36 +1098,37 @@ class DistributedTaskWorker {
                 }`}
               >
                 {/* Video Stream or Avatar Fallback */}
-                {isCameraOn && localStream ? (
-                  <video
-                    ref={(el) => {
-                      localVideoRef.current = el
-                      if (el && localStream && el.srcObject !== localStream) {
-                        el.srcObject = localStream
-                        el.play().catch(() => {})
-                      }
-                    }}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="absolute inset-0 h-full w-full object-cover -scale-x-100"
-                  />
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#181b22] to-[#0f1115]">
-                    <div className="relative flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full border-4 border-[#171717] bg-[#ffd84d] text-3xl sm:text-4xl font-black text-[#171717] shadow-xl">
-                      {myName.slice(0, 1)}
-                      {isMicOn && localAudioLevel > 10 && (
-                        <span className="absolute inset-0 rounded-full border-4 border-[#ffd84d] animate-ping opacity-40" />
-                      )}
-                    </div>
-                    <span className="mt-4 text-xs font-bold text-zinc-400">
-                      Camera turned off
-                    </span>
+                <video
+                  ref={(el) => {
+                    localVideoRef.current = el
+                    if (el && localStream && el.srcObject !== localStream) {
+                      el.srcObject = localStream
+                      el.play().catch(() => {})
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted
+                  className={`absolute inset-0 h-full w-full object-cover -scale-x-100 transition-opacity duration-300 ${
+                    isCameraOn && localStream ? 'opacity-100 z-10' : 'opacity-0 -z-10 pointer-events-none'
+                  }`}
+                />
+                <div className={`absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#181b22] to-[#0f1115] transition-opacity duration-300 ${
+                  isCameraOn && localStream ? 'opacity-0 pointer-events-none' : 'opacity-100 z-0'
+                }`}>
+                  <div className="relative flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full border-4 border-[#171717] bg-[#ffd84d] text-3xl sm:text-4xl font-black text-[#171717] shadow-xl">
+                    {myName.slice(0, 1)}
+                    {isMicOn && localAudioLevel > 10 && (
+                      <span className="absolute inset-0 rounded-full border-4 border-[#ffd84d] animate-ping opacity-40" />
+                    )}
                   </div>
-                )}
+                  <span className="mt-4 text-xs font-bold text-zinc-400">
+                    Camera turned off
+                  </span>
+                </div>
 
                 {/* Dark gradient vignette */}
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
+                <div className="pointer-events-none absolute inset-0 z-20 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
 
                 {/* Top Tile Badges */}
                 <div className="relative z-10 flex items-center justify-between">
@@ -1086,57 +1187,58 @@ class DistributedTaskWorker {
                 }`}
               >
                 {/* Real Live Remote Video or Avatar Fallback */}
-                {peerCameraOn && remoteStream ? (
-                  <video
-                    ref={(el) => {
-                      remoteVideoRef.current = el
-                      if (el && remoteStream && el.srcObject !== remoteStream) {
-                        el.srcObject = remoteStream
-                        el.play().catch(() => {})
-                      }
-                    }}
-                    autoPlay
-                    playsInline
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#1c1f28] to-[#101217]">
-                    <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#39d5c8_1px,transparent_1px)] [background-size:16px_16px]" />
+                <video
+                  ref={(el) => {
+                    remoteVideoRef.current = el
+                    if (el && remoteStream && el.srcObject !== remoteStream) {
+                      el.srcObject = remoteStream
+                      el.play().catch(() => {})
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
+                    peerCameraOn && remoteStream ? 'opacity-100 z-10' : 'opacity-0 -z-10 pointer-events-none'
+                  }`}
+                />
+                <div className={`absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#1c1f28] to-[#101217] transition-opacity duration-300 ${
+                  peerCameraOn && remoteStream ? 'opacity-0 pointer-events-none' : 'opacity-100 z-0'
+                }`}>
+                  <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#39d5c8_1px,transparent_1px)] [background-size:16px_16px]" />
 
-                    <div className="relative flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full border-4 border-[#171717] bg-[#39d5c8] text-3xl sm:text-4xl font-black text-[#171717] shadow-xl">
-                      {peerName.slice(0, 1)}
-                      {isPeerSpeaking && (
-                        <span className="absolute -inset-2 rounded-full border-2 border-[#ffd84d] animate-ping opacity-60" />
-                      )}
-                    </div>
-
-                    <span className="mt-4 font-display text-lg uppercase text-white tracking-wide">
-                      {peerName}
-                    </span>
-                    <span className="text-xs font-semibold text-zinc-400">
-                      {peerRoleLabel}
-                    </span>
-
-                    {connectionStatus === 'waiting' && (
-                      <span className="mt-3 rounded-full bg-black/60 border border-white/20 px-3 py-1 text-[10px] font-mono text-zinc-300">
-                        Waiting for counterpart to join...
-                      </span>
-                    )}
-                    {connectionStatus === 'connecting' && (
-                      <span className="mt-3 rounded-full bg-amber-500/20 border border-amber-500/40 px-3 py-1 text-[10px] font-mono text-amber-300 animate-pulse">
-                        Connecting WebRTC P2P...
-                      </span>
-                    )}
-                    {connectionStatus === 'connected' && !peerCameraOn && (
-                      <span className="mt-2 text-xs font-bold text-zinc-400">
-                        Camera turned off
-                      </span>
+                  <div className="relative flex h-24 w-24 sm:h-28 sm:w-28 items-center justify-center rounded-full border-4 border-[#171717] bg-[#39d5c8] text-3xl sm:text-4xl font-black text-[#171717] shadow-xl">
+                    {peerName.slice(0, 1)}
+                    {isPeerSpeaking && (
+                      <span className="absolute -inset-2 rounded-full border-2 border-[#ffd84d] animate-ping opacity-60" />
                     )}
                   </div>
-                )}
+
+                  <span className="mt-4 font-display text-lg uppercase text-white tracking-wide">
+                    {peerName}
+                  </span>
+                  <span className="text-xs font-semibold text-zinc-400">
+                    {peerRoleLabel}
+                  </span>
+
+                  {connectionStatus === 'waiting' && (
+                    <span className="mt-3 rounded-full bg-black/60 border border-white/20 px-3 py-1 text-[10px] font-mono text-zinc-300">
+                      Waiting for counterpart to join...
+                    </span>
+                  )}
+                  {connectionStatus === 'connecting' && (
+                    <span className="mt-3 rounded-full bg-amber-500/20 border border-amber-500/40 px-3 py-1 text-[10px] font-mono text-amber-300 animate-pulse">
+                      Connecting WebRTC P2P...
+                    </span>
+                  )}
+                  {connectionStatus === 'connected' && !peerCameraOn && (
+                    <span className="mt-2 text-xs font-bold text-zinc-400">
+                      Camera turned off
+                    </span>
+                  )}
+                </div>
 
                 {/* Dark gradient vignette */}
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
+                <div className="pointer-events-none absolute inset-0 z-20 bg-gradient-to-t from-black/70 via-transparent to-black/40" />
 
                 {/* Top Tile Badges */}
                 <div className="relative z-10 flex items-center justify-between">

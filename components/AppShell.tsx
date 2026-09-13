@@ -103,7 +103,7 @@ export function AppShell({ initialTab }: AppShellProps) {
   const isRootPath = typeof window !== 'undefined' && window.location.pathname === '/'
   const currentTab = isRootPath
     ? (portalRole ? 'portal' : 'home')
-    : (initialTab && tab === 'home' ? (portalRole ? 'portal' : initialTab) : tab)
+    : (initialTab || tab)
 
   return (
     <main className="w-full">

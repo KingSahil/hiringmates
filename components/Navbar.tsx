@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { LogOut, Sun, Moon, Settings, ShieldAlert, Lock } from 'lucide-react'
+import { LogOut, Sun, Moon, Settings, ShieldAlert, Lock, ClipboardList } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useTheme } from '@/lib/theme'
@@ -91,6 +91,23 @@ export function Navbar() {
               </span>
             </div>
           </a>
+
+          {/* Assessment button for students only */}
+          {isAuthorized && !portalRole && (
+            <a
+              href="/assessment"
+              onClick={(e) => navigateTo('assessment', e)}
+              className={`flex cursor-pointer items-center gap-1.5 rounded-xl border-2 border-[#171717] px-3 py-1.5 text-xs font-black uppercase transition-all shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:shadow-[2px_2px_0_#000000] ${
+                tab === 'assessment'
+                  ? 'bg-[#171717] text-[#ffd84d] dark:bg-[#ffd84d] dark:text-[#171717]'
+                  : 'bg-[#ffd84d] text-[#171717] hover:bg-[#f5c518] hover:-translate-y-0.5 active:translate-y-0'
+              }`}
+              title="Candidate Assessment"
+            >
+              <ClipboardList className="h-3.5 w-3.5" />
+              <span>Assessment</span>
+            </a>
+          )}
 
           {tab === 'recruiter' && (
             <span className="hidden sm:inline-block rounded-xl border-2 border-[#171717] bg-[#ffd84d] px-3 py-0.5 font-mono text-[11px] font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] dark:border-[#000000]">

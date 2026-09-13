@@ -41,7 +41,7 @@ function getTabFromPath(): AppTab {
 }
 
 export function NavigationProvider({ children }: { children: React.ReactNode }) {
-  const [tab, setTabState] = useState<AppTab>('home')
+  const [tab, setTabState] = useState<AppTab>(() => getTabFromPath())
   const [isAssessmentLocked, setIsAssessmentLocked] = useState(false)
   const violationHandlerRef = useRef<((reason: string) => void) | null>(null)
   const tabRef = useRef<AppTab>('home')

@@ -1003,9 +1003,13 @@ export function PortalContent() {
                       <span className="text-sm font-bold">
                         {new Date(s.scheduled_at).toLocaleString()}
                       </span>
-                      <span className="border-2 border-ink bg-aqua px-3 py-1 font-mono text-[10px] font-black uppercase tracking-wider text-ink">
-                        {s.meeting_id}
-                      </span>
+                      <a
+                        href={`/mentorship?meeting=${encodeURIComponent(s.meeting_id)}`}
+                        className="flex items-center gap-1.5 border-2 border-ink bg-aqua px-3 py-1 font-mono text-[10px] font-black uppercase tracking-wider text-ink shadow-[2px_2px_0_#000] hover:bg-[#ffd84d] transition-all cursor-pointer"
+                        title="Join video call"
+                      >
+                        Join Call: {s.meeting_id}
+                      </a>
                     </div>
                   ))}
                 </div>
