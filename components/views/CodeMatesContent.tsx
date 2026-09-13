@@ -258,24 +258,42 @@ export async function processNext(workerFn) {
     loadChat()
   }, [activeRoom?.id, view, currentUser.id, currentUser.name, roster])
 
-  // 4. Load rooms list
+  // 4. Load MY lobbies (hosted or joined).
+  //
+  // Lobbies are private and unlisted: there is deliberately no public browse
+  // list, and RLS on `rooms` only exposes rows you host or belong to. The old
+  // hardcoded demo rooms are gone — an empty list now means "you have none",
+  // not "fall back to fakes".
   const loadRooms = async () => {
     const supabase = getSupabaseBrowserClient()
+    const { data: { user } } = await supabase.auth.getUser()
+
+    if (!user) {
+      setRooms([])
+      return
+    }
+
+    const { data: memberships } = await supabase
+      .from('room_members')
+      .select('room_id')
+      .eq('user_id', user.id)
+
+    const joinedIds = (memberships ?? [])
+      .map((m: any) => m.room_id)
+      .filter(Boolean)
+
+    // PostgREST OR syntax: host of the room, or a member of it.
+    const scope = joinedIds.length
+      ? `host_id.eq.${user.id},id.in.(${joinedIds.join(',')})`
+      : `host_id.eq.${user.id}`
+
     const { data, error } = await supabase
       .from('rooms')
       .select('id,code,title,status,host_id')
-      .eq('status', 'waiting')
+      .or(scope)
       .order('created_at', { ascending: false })
 
-    if (!error && data && data.length > 0) {
-      setRooms(data as Room[])
-    } else {
-      setRooms([
-        { id: 'room-1', code: 'ASYNC-77', title: 'Bug Bash Speedrun', status: 'waiting', host_id: 'demo-1' },
-        { id: 'room-2', code: 'PIXEL-12', title: 'Interactive Task Board', status: 'waiting', host_id: 'demo-2' },
-        { id: 'room-3', code: 'STACK-04', title: 'Concurrency Race', status: 'waiting', host_id: 'demo-3' },
-      ])
-    }
+    setRooms(error ? [] : ((data ?? []) as Room[]))
   }
 
   useEffect(() => {
@@ -291,82 +309,111 @@ export async function processNext(workerFn) {
     }
   }, [])
 
-  // Create room action
+  const makeRoomCode = () =>
+    `CM-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+
+  // Create room action.
+  //
+  // Private by construction: the room is only ever reachable by its code, and
+  // the RPC inserts the host's membership in the same transaction. Guests no
+  // longer get a phantom local room — creating a lobby requires an account.
   const handleCreateRoom = async () => {
     setErrorMessage('')
     const supabase = getSupabaseBrowserClient()
     const { data: { session } } = await supabase.auth.getSession()
 
-    const generatedCode = `CM-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
-
     if (!session?.user) {
-      const localRoom: Room = {
-        id: crypto.randomUUID(),
-        code: generatedCode,
-        title: newRoomTitle || 'Multiplayer Challenge',
-        status: 'waiting',
-        host_id: currentUser.id,
-      }
-      setActiveRoom(localRoom)
-      setView('lobby')
-      setIsCreatingRoom(false)
+      setErrorMessage('Sign in with GitHub to create a private lobby.')
       return
     }
 
-    const { data, error } = await supabase
-      .from('rooms')
-      .insert({
-        code: generatedCode,
-        title: newRoomTitle || 'Multiplayer Challenge',
-        status: 'waiting',
-        host_id: session.user.id,
+    // Codes are unique, so retry on the rare collision instead of failing.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data, error } = await supabase.rpc('create_room', {
+        p_title: newRoomTitle || 'Multiplayer Challenge',
+        p_code: makeRoomCode(),
       })
-      .select('id,code,title,status,host_id')
-      .single()
 
-    if (error) {
-      setErrorMessage(error.message)
+      if (!error && data) {
+        setActiveRoom(data as Room)
+        setView('lobby')
+        setIsCreatingRoom(false)
+        await loadRooms()
+        return
+      }
+
+      const isDuplicateCode =
+        (error as any)?.code === '23505' ||
+        `${(error as any)?.message ?? ''}`.includes('rooms_code_key')
+
+      if (!isDuplicateCode) {
+        setErrorMessage(
+          (error as any)?.message ?? 'Could not create the room.',
+        )
+        return
+      }
+    }
+
+    setErrorMessage('Could not allocate a unique room code. Please try again.')
+  }
+
+  // Join room by code.
+  //
+  // Routed through the join_room_by_code RPC: RLS deliberately hides rooms you
+  // are not a member of, so a direct SELECT by code would find nothing even
+  // when the code is correct. An unknown code is now a real error instead of
+  // silently inventing a phantom room.
+  const handleJoinByCode = async () => {
+    setErrorMessage('')
+    const code = roomCodeInput.trim().toUpperCase()
+    if (!code) return
+
+    const supabase = getSupabaseBrowserClient()
+    const { data: { session } } = await supabase.auth.getSession()
+
+    if (!session?.user) {
+      setErrorMessage('Sign in with GitHub to join a private lobby.')
+      return
+    }
+
+    const { data, error } = await supabase.rpc('join_room_by_code', {
+      p_code: code,
+    })
+
+    if (error || !data) {
+      const message = `${(error as any)?.message ?? ''}`
+      setErrorMessage(
+        message.includes('room_not_found')
+          ? `No lobby found with code ${code}.`
+          : message || 'Could not join that lobby.',
+      )
       return
     }
 
     setActiveRoom(data as Room)
     setView('lobby')
-    setIsCreatingRoom(false)
+    setRoomCodeInput('')
+    await loadRooms()
   }
 
-  // Join room by code
-  const handleJoinByCode = async () => {
-    setErrorMessage('')
-    const code = roomCodeInput.trim().toUpperCase()
-    if (!code) return
-    const match = rooms.find((r) => r.code === code)
-    if (match) {
-      setActiveRoom(match)
-      setView('lobby')
+  // Leave a lobby for real: drops your membership, so it stops appearing in
+  // your list. "Back to Rooms List" deliberately does NOT do this — you stay a
+  // member and can walk back in.
+  const handleLeaveRoom = async () => {
+    if (!activeRoom) return
+    const supabase = getSupabaseBrowserClient()
+    const { error } = await supabase.rpc('leave_room', {
+      p_room_id: activeRoom.id,
+    })
+
+    if (error) {
+      setErrorMessage((error as any)?.message ?? 'Could not leave the lobby.')
       return
     }
 
-    const supabase = getSupabaseBrowserClient()
-    const { data } = await supabase
-      .from('rooms')
-      .select('id,code,title,status,host_id')
-      .eq('code', code)
-      .maybeSingle()
-
-    if (data) {
-      setActiveRoom(data as Room)
-      setView('lobby')
-    } else {
-      const guestRoom: Room = {
-        id: crypto.randomUUID(),
-        code,
-        title: 'Custom Live Room',
-        status: 'waiting',
-        host_id: 'guest',
-      }
-      setActiveRoom(guestRoom)
-      setView('lobby')
-    }
+    setActiveRoom(null)
+    setView('rooms')
+    await loadRooms()
   }
 
   // Helper: Create or update a remote cursor widget in Monaco
@@ -1139,12 +1186,20 @@ export async function processNext(workerFn) {
         {/* VIEW 2: LOBBY */}
         {view === 'lobby' && activeRoom && (
           <div className="mx-auto max-w-3xl">
-            <button
-              onClick={() => setView('rooms')}
-              className="mb-4 inline-flex cursor-pointer items-center gap-1.5 text-xs font-black uppercase text-[#171717] underline hover:text-[#6d73ff] dark:text-[#f4f4f7] dark:hover:text-[#8085ff]"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" /> Back to Rooms List
-            </button>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <button
+                onClick={() => setView('rooms')}
+                className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-black uppercase text-[#171717] underline hover:text-[#6d73ff] dark:text-[#f4f4f7] dark:hover:text-[#8085ff]"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" /> Back to Rooms List
+              </button>
+              <button
+                onClick={handleLeaveRoom}
+                className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-black uppercase text-red-600 underline hover:text-red-500 dark:text-red-400 dark:hover:text-red-300"
+              >
+                Leave lobby
+              </button>
+            </div>
 
             <div className="grid gap-5 md:grid-cols-[1.1fr_.9fr]">
               <div className="rounded-2xl border-2 border-[#171717] bg-white p-6 shadow-hard transition-colors dark:border-[#2e323b] dark:bg-[#15171c] dark:shadow-[5px_5px_0_#000000]">
