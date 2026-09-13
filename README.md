@@ -40,7 +40,7 @@ Modern technical recruitment is facing an existential integrity crisis:
 3. **Resume & GitHub Exaggeration**: Resumes boast extensive expertise, but traditional screenings fail to verify real commit history, structural code quality, architecture patterns, or test coverage.
 4. **Impractical Trivia Assessments**: Traditional platforms evaluate candidates on inverted binary trees and memorized LeetCode puzzles rather than authentic systems architecture (MCP protocols, distributed task workers, API resilience).
 5. **Collusion, Dual-Display & Screen Sharing Fraud**: Candidates split screens, connect secondary displays, switch browser tabs, or use external smartphones during virtual interviews.
-6. **Recruiter Burnout**: Engineering teams waste hundreds of hours conducting redundant introductory rounds on candidates whose code was ghost-written by AI.
+6. **Recruiter Burnout**: Engineering teams waste hundreds of hours conducting redundant introductory rounds on candidates whose code was ghost-written by AI..
 
 ---
 
