@@ -1,23 +1,62 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { LogOut, Sun, Moon, Settings } from 'lucide-react'
+import { LogOut, Sun, Moon, Settings, ShieldAlert, Lock } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useTheme } from '@/lib/theme'
 import { NotificationBell } from '@/components/NotificationBell'
+import { portalRoleFor, portalRoleForUser } from '@/lib/portal'
 
 export function Navbar() {
   const { user, isAuthorized, signInWithGithub, signOut, setIsSettingsOpen } = useAuth()
-  const { tab, setTab } = useNavigation()
+  const { tab, setTab, isAssessmentLocked } = useNavigation()
   const { theme, toggleTheme } = useTheme()
+  const portalRole = portalRoleForUser(user) || portalRoleFor(user?.email)
+
+  if (isAssessmentLocked) {
+    return (
+      <header className="sticky top-0 z-40 w-full border-b-2 border-rose-600 bg-[#171717] text-[#fffaf0] select-none shadow-md">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-2.5 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border-2 border-rose-500 bg-rose-600/30 text-rose-400">
+              <span className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
+              </span>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-display text-lg uppercase tracking-wider text-rose-400">
+                  Assessment Lockdown Mode
+                </span>
+                <span className="rounded border border-rose-500 bg-rose-950 px-2 py-0.5 font-mono text-[10px] font-black uppercase tracking-wide text-rose-300">
+                  Active Proctoring
+                </span>
+              </div>
+              <p className="text-[11px] font-bold text-zinc-400">
+                Navigation controls and external links are locked. Navigating away or switching views will immediately disqualify your attempt.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900/90 px-3 py-1 text-xs font-bold text-zinc-300">
+              <Lock className="h-3.5 w-3.5 text-amber-400" />
+              <span>Fullscreen &amp; Window Locked</span>
+            </div>
+          </div>
+        </div>
+      </header>
+    )
+  }
 
   const navigateTo = (target: AppTab, e?: React.MouseEvent) => {
     if (e) {
       if (e.metaKey || e.ctrlKey) return
       e.preventDefault()
     }
-    setTab(target)
+    const resolvedTarget = target === 'home' && portalRole ? 'portal' : target
+    setTab(resolvedTarget)
   }
 
   const userDisplayName =
@@ -34,10 +73,10 @@ export function Navbar() {
         {/* Brand */}
         <div className="flex items-center gap-6">
           <a
-            href="/"
+            href={portalRole ? '/portal' : '/'}
             onClick={(e) => navigateTo('home', e)}
             className="flex cursor-pointer items-center gap-2.5 transition-transform active:scale-95"
-            title="HiringMates Home"
+            title={portalRole ? 'HiringMates Portal' : 'HiringMates Home'}
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-xl border-2 border-[#171717] bg-[#ffd84d] shadow-[2px_2px_0_#171717] dark:border-[#2e323b] dark:shadow-[2px_2px_0_#000000]">
               <img
@@ -83,9 +122,9 @@ export function Navbar() {
             /* Dedicated Recruiter Navbar Controls */
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setTab('home')}
+                onClick={() => setTab(portalRole ? 'portal' : 'home')}
                 className="flex cursor-pointer items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-white px-3 py-1.5 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:bg-[#ff57ce] hover:text-white dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:shadow-[2px_2px_0_#000000]"
-                title="Exit Recruiter View to Candidate Platform"
+                title={portalRole ? 'Exit Recruiter View to Portal' : 'Exit Recruiter View to Candidate Platform'}
               >
                 <span>Exit Recruiter Portal</span>
               </button>

@@ -3,18 +3,20 @@
 import { useState, useEffect } from 'react'
 import { X, Settings, Link2, Trash2, Plus, CheckCircle2, AlertCircle, Shield, User, GitBranch } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
+import { useNavigation } from '@/lib/navigation'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 
 interface LinkedAccount {
   id: string
   provider: string
   account_identifier: string
-  label?: string
+  label: string
   linked_at: string
 }
 
 export function SettingsModal() {
   const { user, isSettingsOpen, setIsSettingsOpen } = useAuth()
+  const { isAssessmentLocked } = useNavigation()
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedAccount[]>([])
   const [loading, setLoading] = useState(false)
   const [providerType, setProviderType] = useState<'github_secondary' | 'linkedin' | 'email_secondary' | 'custom'>('github_secondary')
@@ -45,7 +47,7 @@ export function SettingsModal() {
     }
   }, [isSettingsOpen, user])
 
-  if (!isSettingsOpen || !user) return null
+  if (!isSettingsOpen || !user || isAssessmentLocked) return null
 
   const handleAddSecondaryAccount = async (e: React.FormEvent) => {
     e.preventDefault()

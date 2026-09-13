@@ -33,7 +33,7 @@ import { useNavigation } from '@/lib/navigation'
 import { useNotifications, UserRole } from '@/lib/notifications'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { isMentor as isMentorEmail } from '@/lib/portal'
+import { isMentor as isMentorEmail, portalRoleForUser, portalRoleFor } from '@/lib/portal'
 
 interface ChatMessage {
   id: string
@@ -779,6 +779,33 @@ class DistributedTaskWorker {
     setTimeout(() => setCopiedLink(false), 2000)
   }
 
+  // Leave Call Handler — Mentors and Companies MUST redirect to their dashboard ('portal'), candidates to 'home'
+  const handleLeaveCall = () => {
+    try {
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop())
+      }
+      if (screenStream) {
+        screenStream.getTracks().forEach((track) => track.stop())
+      }
+    } catch {
+      // ignore
+    }
+
+    const pRole = portalRoleForUser(user) || portalRoleFor(user?.email)
+    const isMentorOrCompany =
+      pRole === 'mentor' ||
+      pRole === 'company' ||
+      isMentor ||
+      activeRole === 'mentor'
+
+    if (isMentorOrCompany) {
+      setTab('portal')
+    } else {
+      setTab('home')
+    }
+  }
+
   return (
     <div className="relative flex h-[calc(100vh-65px)] w-full flex-col overflow-hidden bg-[#0c0d11] text-[#f4f4f7] select-none font-sans">
       {/* Floating Animated Emoji Reactions */}
@@ -1269,7 +1296,7 @@ class DistributedTaskWorker {
 
               {/* End Call / Leave Button */}
               <button
-                onClick={() => setTab('home')}
+                onClick={handleLeaveCall}
                 className="cursor-pointer flex h-11 px-4 sm:h-12 sm:px-6 items-center justify-center gap-2 rounded-xl border-2 border-rose-600 bg-rose-600 text-white shadow-[2px_2px_0_#000] transition-all hover:bg-rose-700 active:scale-95 font-black uppercase text-xs"
                 title="Leave mentorship call"
               >

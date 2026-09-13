@@ -52,6 +52,15 @@ export function isMentor(email: string | null | undefined): boolean {
   return portalRoleFor(email) === 'mentor'
 }
 
+export function portalRoleForUser(user: { email?: string | null; user_metadata?: any; app_metadata?: any } | null | undefined): PortalRole {
+  if (!user) return null
+  const fromEmail = portalRoleFor(user.email)
+  if (fromEmail) return fromEmail
+  const metaRole = (user.user_metadata?.role || user.app_metadata?.role)?.toString().toLowerCase()
+  if (metaRole === 'company' || metaRole === 'mentor') return metaRole
+  return null
+}
+
 /** The company every mentor is attached to. Single-company for now. */
 export function companyForMentor(email: string | null | undefined): string | null {
   return isMentor(email) ? COMPANY_EMAIL : null

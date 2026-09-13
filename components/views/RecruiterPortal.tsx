@@ -22,6 +22,8 @@ import {
 } from 'lucide-react'
 import { useNavigation } from '@/lib/navigation'
 import { useNotifications } from '@/lib/notifications'
+import { useAuth } from '@/lib/auth'
+import { portalRoleFor, portalRoleForUser } from '@/lib/portal'
 
 interface StudentCandidate {
   id: string
@@ -128,8 +130,10 @@ const INITIAL_STUDENTS: StudentCandidate[] = [
 ]
 
 export function RecruiterPortal() {
+  const { user } = useAuth()
   const { setTab } = useNavigation()
   const { triggerRound2Notification, setActiveRole } = useNotifications()
+  const portalRole = portalRoleForUser(user) || portalRoleFor(user?.email)
 
   const [students, setStudents] = useState<StudentCandidate[]>(INITIAL_STUDENTS)
   const [searchQuery, setSearchQuery] = useState('')
@@ -212,10 +216,10 @@ export function RecruiterPortal() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setTab('home')}
+              onClick={() => setTab(portalRole ? 'portal' : 'home')}
               className="btn-neo btn-neo-paper text-xs"
             >
-              <ArrowLeft className="h-3.5 w-3.5" /> Back to Home
+              <ArrowLeft className="h-3.5 w-3.5" /> {portalRole ? 'Back to Portal' : 'Back to Home'}
             </button>
           </div>
         </div>

@@ -12,7 +12,7 @@ import { AssessmentContent } from '@/components/views/AssessmentContent'
 import { RecruiterPortal } from '@/components/views/RecruiterPortal'
 import { PortalContent } from '@/components/views/PortalContent'
 import { PositionsContent } from '@/components/views/PositionsContent'
-import { portalRoleFor } from '@/lib/portal'
+import { portalRoleFor, portalRoleForUser } from '@/lib/portal'
 
 interface AppShellProps {
   initialTab?: AppTab
@@ -22,7 +22,6 @@ export function AppShell({ initialTab }: AppShellProps) {
   const { tab, setTab } = useNavigation()
   const { isAuthorized, loading, user } = useAuth()
   const autoCheckRef = useRef(false)
-  const portalRedirectRef = useRef(false)
   const wasAuthorizedRef = useRef<boolean | null>(null)
 
   // Redirect to unauthorized home page whenever ANY account logs out anytime
@@ -42,15 +41,14 @@ export function AppShell({ initialTab }: AppShellProps) {
     wasAuthorizedRef.current = isAuthorized
   }, [isAuthorized, loading, setTab])
 
-  // Company and mentor accounts land straight on their dashboard instead of
-  // the student home. Fires once per mount, so they can still navigate back to
-  // the home page afterwards without being bounced.
-  const portalRole = portalRoleFor(user?.email)
+  // Mentors and companies accounts should ALWAYS redirect to their respective dashboards (portal).
+  // They should never land on or be redirected to the student home page.
+  const portalRole = portalRoleForUser(user) || portalRoleFor(user?.email)
   useEffect(() => {
     if (loading || !isAuthorized || !portalRole) return
-    if (portalRedirectRef.current) return
-    portalRedirectRef.current = true
-    if (tab === 'home') setTab('portal')
+    if (tab === 'home') {
+      setTab('portal')
+    }
   }, [loading, isAuthorized, portalRole, tab, setTab])
 
   // First sign-in for an account that has never been registered: start the
@@ -103,7 +101,9 @@ export function AppShell({ initialTab }: AppShellProps) {
   }, [initialTab, setTab, tab])
 
   const isRootPath = typeof window !== 'undefined' && window.location.pathname === '/'
-  const currentTab = isRootPath ? 'home' : (initialTab && tab === 'home' ? initialTab : tab)
+  const currentTab = isRootPath
+    ? (portalRole ? 'portal' : 'home')
+    : (initialTab && tab === 'home' ? (portalRole ? 'portal' : initialTab) : tab)
 
   return (
     <main className="w-full">
