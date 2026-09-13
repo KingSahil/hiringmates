@@ -54,7 +54,10 @@ const RTC_CONFIG: RTCConfiguration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
     {
       urls: [
         'turn:openrelay.metered.ca:80',
@@ -319,6 +322,34 @@ class DistributedTaskWorker {
     }
   }, [])
 
+  // Helper: Attach current local tracks to a peer connection safely
+  const attachLocalTracksToPc = useCallback((pc: RTCPeerConnection) => {
+    if (!localStreamRef.current) return
+    const stream = localStreamRef.current
+    const senders = pc.getSenders()
+
+    stream.getTracks().forEach((track) => {
+      const existing = senders.find((s) => s.track?.kind === track.kind)
+      if (existing) {
+        existing.replaceTrack(track).catch(() => {})
+      } else {
+        const transceiver = pc.getTransceivers().find(
+          (t) => t.receiver.track.kind === track.kind
+        )
+        if (transceiver && transceiver.sender) {
+          transceiver.sender.replaceTrack(track).catch(() => {})
+          transceiver.direction = 'sendrecv'
+        } else {
+          try {
+            pc.addTrack(track, stream)
+          } catch {
+            // ignore duplicate
+          }
+        }
+      }
+    })
+  }, [])
+
   // 2. Setup WebRTC Peer Connection Factory (Stable, resilient to re-renders)
   const getOrCreatePeerConnection = useCallback(() => {
     if (peerConnectionRef.current) return peerConnectionRef.current
@@ -326,69 +357,103 @@ class DistributedTaskWorker {
     const pc = new RTCPeerConnection(RTC_CONFIG)
     peerConnectionRef.current = pc
 
-    // Add audio and video transceivers immediately to negotiate both directions upfront
-    try {
-      pc.addTransceiver('audio', { direction: 'sendrecv' })
-      pc.addTransceiver('video', { direction: 'sendrecv' })
-    } catch (err) {
-      console.warn('Transceiver allocation notice:', err)
+    // Add audio and video tracks if available, otherwise prepare transceivers
+    const audioTrack = localStreamRef.current?.getAudioTracks()[0]
+    const videoTrack = localStreamRef.current?.getVideoTracks()[0]
+
+    if (audioTrack && localStreamRef.current) {
+      try {
+        pc.addTrack(audioTrack, localStreamRef.current)
+      } catch {}
+    } else {
+      try {
+        pc.addTransceiver('audio', { direction: 'sendrecv' })
+      } catch (err) {
+        console.warn('Transceiver audio notice:', err)
+      }
     }
 
-    // Add local tracks if stream is already available
-    if (localStreamRef.current) {
-      const senders = pc.getSenders()
-      localStreamRef.current.getTracks().forEach((track) => {
-        const existing = senders.find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind)
-        if (existing) {
-          existing.replaceTrack(track).catch(() => {})
-        } else {
-          try {
-            pc.addTrack(track, localStreamRef.current!)
-          } catch {
-            // ignore duplicate track
-          }
-        }
-      })
+    if (videoTrack && localStreamRef.current) {
+      try {
+        pc.addTrack(videoTrack, localStreamRef.current)
+      } catch {}
+    } else {
+      try {
+        pc.addTransceiver('video', { direction: 'sendrecv' })
+      } catch (err) {
+        console.warn('Transceiver video notice:', err)
+      }
     }
 
     pc.onicecandidate = (event) => {
       if (event.candidate && channelRef.current) {
-        channelRef.current.send({
-          type: 'broadcast',
-          event: 'webrtc-ice',
-          payload: { candidate: event.candidate, senderId: clientId },
-        })
+        try {
+          const cand = event.candidate.toJSON
+            ? event.candidate.toJSON()
+            : {
+                candidate: event.candidate.candidate,
+                sdpMid: event.candidate.sdpMid,
+                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                usernameFragment: event.candidate.usernameFragment,
+              }
+          channelRef.current.send({
+            type: 'broadcast',
+            event: 'webrtc-ice',
+            payload: { candidate: cand, senderId: clientId },
+          })
+        } catch (e) {
+          console.warn('ICE candidate send warning:', e)
+        }
       }
     }
 
     pc.ontrack = (event) => {
+      console.log('WebRTC ontrack event:', event.track.kind, event.track.id)
       let stream = event.streams?.[0]
       if (!stream) {
         if (!remoteStreamRef.current) {
           remoteStreamRef.current = new MediaStream()
         }
         remoteStreamRef.current.addTrack(event.track)
-        stream = remoteStreamRef.current
+        stream = new MediaStream(remoteStreamRef.current.getTracks())
       } else {
-        remoteStreamRef.current = stream
+        stream = new MediaStream(stream.getTracks())
       }
+      remoteStreamRef.current = stream
 
       setRemoteStream(stream)
       setRemoteConnected(true)
       setConnectionStatus('connected')
 
-      if (remoteVideoRef.current && remoteVideoRef.current.srcObject !== stream) {
+      if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = stream
         remoteVideoRef.current.play().catch(() => {})
       }
-      if (pipRemoteVideoRef.current && pipRemoteVideoRef.current.srcObject !== stream) {
+      if (pipRemoteVideoRef.current) {
         pipRemoteVideoRef.current.srcObject = stream
         pipRemoteVideoRef.current.play().catch(() => {})
       }
     }
 
+    pc.oniceconnectionstatechange = () => {
+      const state = pc.iceConnectionState
+      console.log('WebRTC ICE state:', state)
+      if (state === 'connected' || state === 'completed') {
+        setConnectionStatus('connected')
+        setRemoteConnected(true)
+      } else if (state === 'failed') {
+        console.warn('ICE connection failed, restarting ICE...')
+        try {
+          pc.restartIce()
+        } catch {}
+      } else if (state === 'disconnected') {
+        setConnectionStatus('connecting')
+      }
+    }
+
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState
+      console.log('WebRTC connection state:', state)
       if (state === 'connected') {
         setConnectionStatus('connected')
         setRemoteConnected(true)
@@ -409,22 +474,8 @@ class DistributedTaskWorker {
   useEffect(() => {
     localStreamRef.current = localStream
     if (!peerConnectionRef.current || !localStream) return
-    const pc = peerConnectionRef.current
-    const senders = pc.getSenders()
-
-    localStream.getTracks().forEach((track) => {
-      const existing = senders.find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind)
-      if (existing) {
-        existing.replaceTrack(track).catch(() => {})
-      } else {
-        try {
-          pc.addTrack(track, localStream)
-        } catch {
-          // ignore
-        }
-      }
-    })
-  }, [localStream])
+    attachLocalTracksToPc(peerConnectionRef.current)
+  }, [localStream, attachLocalTracksToPc])
 
   // 4. Remote audio activity detector (Authentic remote speaking pulse)
   useEffect(() => {
@@ -487,14 +538,22 @@ class DistributedTaskWorker {
 
     const createAndSendOffer = async (pc: RTCPeerConnection) => {
       try {
+        if (makingOfferRef.current) return
         makingOfferRef.current = true
+
+        // Ensure tracks are attached before offer is produced
+        attachLocalTracksToPc(pc)
+
         const offer = await pc.createOffer()
         await pc.setLocalDescription(offer)
         channel.send({
           type: 'broadcast',
           event: 'webrtc-offer',
           payload: {
-            sdp: pc.localDescription,
+            sdp: {
+              type: pc.localDescription?.type,
+              sdp: pc.localDescription?.sdp,
+            },
             senderId: clientId,
             senderName: myNameRef.current,
             senderRole: myRoleLabelRef.current,
@@ -554,6 +613,37 @@ class DistributedTaskWorker {
           await createAndSendOffer(pc)
         }
       })
+      // Periodic heartbeat ping to auto-discover peers
+      .on('broadcast', { event: 'webrtc-ping' }, async ({ payload }: any) => {
+        if (!payload || payload.clientId === clientId) return
+        if (payload.name) setRemotePeerName(payload.name)
+        if (payload.role) setRemotePeerRole(payload.role)
+        if (typeof payload.isCameraOn === 'boolean') setPeerCameraOn(payload.isCameraOn)
+        if (typeof payload.isMicOn === 'boolean') setPeerMicOn(payload.isMicOn)
+
+        const pc = peerConnectionRef.current
+        const notConnected = !pc || (pc.connectionState !== 'connected' && pc.iceConnectionState !== 'connected')
+        if (notConnected) {
+          const shouldInitiate = isMentorRef.current || (!payload.isMentor && clientId > payload.clientId)
+          if (shouldInitiate) {
+            const activePc = getOrCreatePeerConnection()
+            await createAndSendOffer(activePc)
+          } else {
+            channel.send({
+              type: 'broadcast',
+              event: 'webrtc-peer-ready',
+              payload: {
+                clientId,
+                name: myNameRef.current,
+                role: myRoleLabelRef.current,
+                isMentor: isMentorRef.current,
+                isCameraOn: isCameraOnRef.current,
+                isMicOn: isMicOnRef.current,
+              },
+            })
+          }
+        }
+      })
       // Incoming SDP Offer with W3C Perfect Negotiation (rollback on glare)
       .on('broadcast', { event: 'webrtc-offer' }, async ({ payload }: any) => {
         if (!payload || payload.senderId === clientId || !payload.sdp) return
@@ -575,11 +665,20 @@ class DistributedTaskWorker {
           setConnectionStatus('connecting')
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
 
-          // Drain queued ICE candidates
+          // Drain queued ICE candidates safely
           while (pendingCandidatesRef.current.length > 0) {
             const cand = pendingCandidatesRef.current.shift()
-            if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand))
+            if (cand) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand))
+              } catch (e) {
+                console.warn('Queued ICE candidate warning:', e)
+              }
+            }
           }
+
+          // Attach local tracks before producing answer
+          attachLocalTracksToPc(pc)
 
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
@@ -587,7 +686,14 @@ class DistributedTaskWorker {
           channel.send({
             type: 'broadcast',
             event: 'webrtc-answer',
-            payload: { sdp: pc.localDescription, senderId: clientId, senderName: myNameRef.current },
+            payload: {
+              sdp: {
+                type: pc.localDescription?.type,
+                sdp: pc.localDescription?.sdp,
+              },
+              senderId: clientId,
+              senderName: myNameRef.current,
+            },
           })
         } catch (err) {
           console.warn('Error handling WebRTC offer:', err)
@@ -603,10 +709,16 @@ class DistributedTaskWorker {
           if (pc.signalingState === 'have-local-offer') {
             await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
 
-            // Drain queued ICE candidates
+            // Drain queued ICE candidates safely
             while (pendingCandidatesRef.current.length > 0) {
               const cand = pendingCandidatesRef.current.shift()
-              if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand))
+              if (cand) {
+                try {
+                  await pc.addIceCandidate(new RTCIceCandidate(cand))
+                } catch (e) {
+                  console.warn('Queued ICE candidate warning:', e)
+                }
+              }
             }
           }
         } catch (err) {
@@ -619,10 +731,13 @@ class DistributedTaskWorker {
 
         try {
           const pc = getOrCreatePeerConnection()
+          const cand = payload.candidate
+          if (!cand.candidate && !cand.sdpMid && cand.sdpMLineIndex === null) return
+
           if (pc.remoteDescription && pc.remoteDescription.type) {
-            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate))
+            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {})
           } else {
-            pendingCandidatesRef.current.push(payload.candidate)
+            pendingCandidatesRef.current.push(cand)
           }
         } catch (err) {
           console.warn('Error adding ICE candidate:', err)
@@ -680,7 +795,26 @@ class DistributedTaskWorker {
         }
       })
 
+    // Heartbeat: ping room every 3.5s to ensure reliable discovery
+    const pingTimer = setInterval(() => {
+      if (channelRef.current) {
+        channelRef.current.send({
+          type: 'broadcast',
+          event: 'webrtc-ping',
+          payload: {
+            clientId,
+            name: myNameRef.current,
+            role: myRoleLabelRef.current,
+            isMentor: isMentorRef.current,
+            isCameraOn: isCameraOnRef.current,
+            isMicOn: isMicOnRef.current,
+          },
+        })
+      }
+    }, 3500)
+
     return () => {
+      clearInterval(pingTimer)
       try {
         channel.send({
           type: 'broadcast',
@@ -697,7 +831,7 @@ class DistributedTaskWorker {
       channelRef.current = null
       supabase.removeChannel(channel)
     }
-  }, [meetingId, clientId, getOrCreatePeerConnection])
+  }, [meetingId, clientId, getOrCreatePeerConnection, attachLocalTracksToPc])
 
   // Re-attach camera stream to local video ref
   useEffect(() => {
@@ -716,6 +850,26 @@ class DistributedTaskWorker {
       })
     }
   }, [screenStream, isScreenSharing])
+
+  // Ensure remote audio/video resumes on user interaction if browser autoplay initially paused it
+  useEffect(() => {
+    const handleResumeMedia = () => {
+      if (remoteStream) {
+        if (remoteVideoRef.current && remoteVideoRef.current.paused) {
+          remoteVideoRef.current.play().catch(() => {})
+        }
+        if (pipRemoteVideoRef.current && pipRemoteVideoRef.current.paused) {
+          pipRemoteVideoRef.current.play().catch(() => {})
+        }
+      }
+    }
+    window.addEventListener('click', handleResumeMedia, { passive: true })
+    window.addEventListener('keydown', handleResumeMedia, { passive: true })
+    return () => {
+      window.removeEventListener('click', handleResumeMedia)
+      window.removeEventListener('keydown', handleResumeMedia)
+    }
+  }, [remoteStream])
 
   // Toggle Camera
   const toggleCamera = useCallback(() => {
@@ -1053,12 +1207,19 @@ class DistributedTaskWorker {
                     }}
                     autoPlay
                     playsInline
+                    onLoadedMetadata={() => {
+                      pipRemoteVideoRef.current?.play().catch(() => {})
+                    }}
                     className={`h-full w-full object-cover transition-opacity duration-300 ${
-                      peerCameraOn && remoteStream ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                      peerCameraOn && remoteStream && remoteStream.getVideoTracks().length > 0
+                        ? 'opacity-100 z-10'
+                        : 'opacity-0 pointer-events-none'
                     }`}
                   />
                   <div className={`absolute inset-0 flex items-center justify-center bg-gradient-to-br from-indigo-900/60 to-purple-950/60 transition-opacity duration-300 ${
-                    peerCameraOn && remoteStream ? 'opacity-0 pointer-events-none' : 'opacity-100'
+                    peerCameraOn && remoteStream && remoteStream.getVideoTracks().length > 0
+                      ? 'opacity-0 pointer-events-none'
+                      : 'opacity-100 z-0'
                   }`}>
                     <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/20 bg-[#39d5c8] text-base font-black text-black">
                       {peerName.slice(0, 1)}
@@ -1210,12 +1371,30 @@ class DistributedTaskWorker {
                   }}
                   autoPlay
                   playsInline
+                  onLoadedMetadata={() => {
+                    remoteVideoRef.current?.play().catch(() => {})
+                  }}
                   className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
-                    peerCameraOn && remoteStream ? 'opacity-100 z-10' : 'opacity-0 -z-10 pointer-events-none'
+                    peerCameraOn && remoteStream && remoteStream.getVideoTracks().length > 0
+                      ? 'opacity-100 z-10'
+                      : 'opacity-0 -z-10 pointer-events-none'
                   }`}
                 />
+                {/* Audio player for remote peer stream to guarantee sound */}
+                <audio
+                  ref={(el) => {
+                    if (el && remoteStream && el.srcObject !== remoteStream) {
+                      el.srcObject = remoteStream
+                      el.play().catch(() => {})
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                />
                 <div className={`absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-[#1c1f28] to-[#101217] transition-opacity duration-300 ${
-                  peerCameraOn && remoteStream ? 'opacity-0 pointer-events-none' : 'opacity-100 z-0'
+                  peerCameraOn && remoteStream && remoteStream.getVideoTracks().length > 0
+                    ? 'opacity-0 pointer-events-none'
+                    : 'opacity-100 z-0'
                 }`}>
                   <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#39d5c8_1px,transparent_1px)] [background-size:16px_16px]" />
 
