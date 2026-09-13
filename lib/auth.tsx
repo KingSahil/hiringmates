@@ -38,6 +38,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const supabase = getSupabaseBrowserClient()
 
+    // 1. If code parameter is in URL, handle it appropriately
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+      if (code) {
+        // If landed on localhost with an OAuth code, immediately forward to the production site
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+          window.location.href = `https://hiringmates.vercel.app/auth/callback?code=${encodeURIComponent(code)}`
+          return
+        } else {
+          // If landed directly on root of production with a code, exchange it for session
+          supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
+            if (!error && data?.session) {
+              setSession(data.session)
+              setUser(data.session.user)
+              const cleanUrl = window.location.pathname + (window.location.hash || '')
+              window.history.replaceState({}, '', cleanUrl)
+            }
+          })
+        }
+      }
+    }
+
     // Get initial session
     supabase.auth.getSession().then(({ data }: any) => {
       setSession(data.session)
