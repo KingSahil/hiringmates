@@ -9,6 +9,7 @@ import { HireMeContent } from '@/components/views/HireMeContent'
 import { CodeMatesContent } from '@/components/views/CodeMatesContent'
 import { MentorshipMeetContent } from '@/components/views/MentorshipMeetContent'
 import { AssessmentContent } from '@/components/views/AssessmentContent'
+import { RecruiterPortal } from '@/components/views/RecruiterPortal'
 
 interface AppShellProps {
   initialTab?: AppTab
@@ -53,6 +54,7 @@ export function AppShell({ initialTab }: AppShellProps) {
         (initialTab === 'codemates' && currentPath.includes('codemates')) ||
         (initialTab === 'mentorship' && currentPath.includes('mentorship')) ||
         (initialTab === 'assessment' && currentPath.includes('assessment')) ||
+        (initialTab === 'recruiter' && currentPath.includes('recruiter')) ||
         (initialTab === 'home' && currentPath === '/')
       ) {
         setTab(initialTab)
@@ -71,6 +73,7 @@ export function AppShell({ initialTab }: AppShellProps) {
       {currentTab === 'codemates' && <CodeMatesContent />}
       {currentTab === 'mentorship' && <MentorshipMeetContent />}
       {currentTab === 'assessment' && <AssessmentContent />}
+      {currentTab === 'recruiter' && <RecruiterPortal />}
     </main>
   )
 }

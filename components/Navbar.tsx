@@ -9,7 +9,7 @@ import { NotificationBell } from '@/components/NotificationBell'
 
 export function Navbar() {
   const { user, isAuthorized, signInWithGithub, signOut, setIsSettingsOpen } = useAuth()
-  const { setTab } = useNavigation()
+  const { tab, setTab } = useNavigation()
   const { theme, toggleTheme } = useTheme()
 
   const navigateTo = (target: AppTab, e?: React.MouseEvent) => {
@@ -52,6 +52,12 @@ export function Navbar() {
               </span>
             </div>
           </a>
+
+          {tab === 'recruiter' && (
+            <span className="hidden sm:inline-block rounded-xl border-2 border-[#171717] bg-[#ffd84d] px-3 py-0.5 font-mono text-[11px] font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] dark:border-[#000000]">
+              TPO / Recruiter Suite
+            </span>
+          )}
         </div>
 
         {/* Right Navigation / Controls */}
@@ -73,7 +79,18 @@ export function Navbar() {
           {/* Round 2 Mentorship Notification Bell */}
           <NotificationBell />
 
-          {isAuthorized ? (
+          {tab === 'recruiter' ? (
+            /* Dedicated Recruiter Navbar Controls */
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setTab('home')}
+                className="flex cursor-pointer items-center gap-1.5 rounded-xl border-2 border-[#171717] bg-white px-3 py-1.5 text-xs font-black uppercase text-[#171717] shadow-[2px_2px_0_#171717] transition hover:bg-[#ff57ce] hover:text-white dark:border-[#2e323b] dark:bg-[#15171c] dark:text-[#f4f4f7] dark:shadow-[2px_2px_0_#000000]"
+                title="Exit Recruiter View to Candidate Platform"
+              >
+                <span>Exit Recruiter Portal</span>
+              </button>
+            </div>
+          ) : isAuthorized ? (
             <div className="flex items-center gap-2">
               {/* Settings Button on Top of Navbar */}
               <button

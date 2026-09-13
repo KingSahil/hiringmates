@@ -4,6 +4,7 @@ import Editor from '@monaco-editor/react'
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, Copy, Play, Plus, Send, Users, Wifi, X, Zap } from 'lucide-react'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
+import { getAuthRedirectUrl } from '@/lib/auth-redirect'
 
 type Nav = (view: 'home' | 'auth' | 'codemates' | 'rooms' | 'lobby' | 'game') => void
 
@@ -26,7 +27,7 @@ export function AuthPage({ nav }: { nav: Nav }) {
     setBusy(true)
     setMessage('')
     const supabase = getSupabaseBrowserClient()
-    const { error } = await supabase.auth.signInWithOtp({ email: normalizedEmail, options: { shouldCreateUser: false, emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback` } })
+    const { error } = await supabase.auth.signInWithOtp({ email: normalizedEmail, options: { shouldCreateUser: false, emailRedirectTo: getAuthRedirectUrl('/auth/callback') } })
     setMessage(error ? 'No code was sent. Check the email address or use Google sign in.' : 'A sign-in code was sent. Check your inbox and spam folder.')
     setOtpSent(!error)
     setBusy(false)
@@ -48,7 +49,7 @@ export function AuthPage({ nav }: { nav: Nav }) {
     const supabase = getSupabaseBrowserClient()
     const result = mode === 'sign-in'
       ? await supabase.auth.signInWithPassword({ email: normalizedEmail, password })
-      : await supabase.auth.signUp({ email: normalizedEmail, password, options: { data: { display_name: name.trim() || 'Candidate' }, emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback` } })
+      : await supabase.auth.signUp({ email: normalizedEmail, password, options: { data: { display_name: name.trim() || 'Candidate' }, emailRedirectTo: getAuthRedirectUrl('/auth/callback') } })
     const errorMessage = result.error?.message.toLowerCase() ?? ''
     if (result.error) {
       if (errorMessage.includes('email not confirmed')) setMessage('Confirm your email first, then sign in. Check spam or request a new confirmation email below.')
@@ -66,7 +67,7 @@ export function AuthPage({ nav }: { nav: Nav }) {
     if (!normalizedEmail) return setMessage('Enter your email first.')
     setBusy(true)
     const supabase = getSupabaseBrowserClient()
-    const { error } = await supabase.auth.resend({ type: 'signup', email: normalizedEmail, options: { emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ?? `${window.location.origin}/auth/callback` } })
+    const { error } = await supabase.auth.resend({ type: 'signup', email: normalizedEmail, options: { emailRedirectTo: getAuthRedirectUrl('/auth/callback') } })
     setMessage(error ? 'We could not resend the email. Wait a moment and try again.' : 'Confirmation email sent. Check your inbox and spam folder.')
     setBusy(false)
   }
@@ -74,7 +75,7 @@ export function AuthPage({ nav }: { nav: Nav }) {
     setBusy(true)
     setMessage('')
     const supabase = getSupabaseBrowserClient()
-    const { error } = await supabase.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: `${window.location.origin}/auth/callback` } })
+    const { error } = await supabase.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: getAuthRedirectUrl('/auth/callback') } })
     if (error) {
       setMessage('GitHub sign in is not enabled for this app yet.')
       setBusy(false)
@@ -84,7 +85,7 @@ export function AuthPage({ nav }: { nav: Nav }) {
     setBusy(true)
     setMessage('')
     const supabase = getSupabaseBrowserClient()
-    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/auth/callback` } })
+    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: getAuthRedirectUrl('/auth/callback') } })
     if (error) {
       setMessage('Google sign in is not enabled for this app yet.')
       setBusy(false)

@@ -14,9 +14,11 @@ import {
   FileCode,
   ShieldCheck,
   Sparkles,
+  Briefcase,
 } from 'lucide-react'
 import gsap from 'gsap'
 import { useAuth } from '@/lib/auth'
+import { useNavigation } from '@/lib/navigation'
 import { cn } from '@/lib/utils'
 
 const faqs = [
@@ -73,6 +75,7 @@ const faqs = [
 export function LandingContent() {
   const rootRef = useRef<HTMLDivElement>(null)
   const { signInWithGithub } = useAuth()
+  const { setTab } = useNavigation()
   const [openFaq, setOpenFaq] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -261,7 +264,7 @@ export function LandingContent() {
           </p>
 
           {/* Call to Action: Sign in to GitHub */}
-          <div data-rise className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <div data-rise className="mt-8 flex flex-col items-center justify-center gap-4">
             <button
               onClick={handleGitHubSignIn}
               disabled={loading}
@@ -277,6 +280,51 @@ export function LandingContent() {
               <span>{loading ? 'Opening GitHub...' : 'Sign in to GitHub'}</span>
               <ArrowRight className="h-4 w-4" />
             </button>
+
+            {/* If you are a mentor / recruiter button with hand-drawn curve arrow */}
+            <div className="relative mt-5 flex flex-col items-center">
+              {/* Playful curved arrow & annotation badge */}
+              <div className="flex items-center gap-2 mb-1.5 animate-bounce [animation-duration:3s]">
+                <span className="rounded-full border-2 border-[#171717] bg-[#ffd84d] px-3 py-0.5 font-mono text-[11px] font-black uppercase tracking-wider text-[#171717] shadow-[2px_2px_0_#171717] rotate-[-2.5deg]">
+                  If you are a mentor / recruiter
+                </span>
+                {/* Curved Arrow SVG */}
+                <svg
+                  className="h-7 w-10 text-[#171717] dark:text-[#ffd84d]"
+                  viewBox="0 0 40 28"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M4 4 C 18 2, 34 8, 28 22"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeDasharray="3 3"
+                  />
+                  <path
+                    d="M21 17 L 28 23 L 34 16"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </div>
+
+              {/* Click Here Button (Recruiter Portal) */}
+              <button
+                onClick={() => setTab('recruiter')}
+                className="group flex cursor-pointer items-center justify-center gap-2.5 rounded-2xl border-3 border-[#171717] bg-[#39d5c8] px-6 py-3 text-xs sm:text-sm font-black uppercase tracking-wider text-[#171717] shadow-hard transition-all hover:-translate-y-1 hover:bg-[#2dc4b7] hover:shadow-[7px_7px_0_#171717] active:translate-y-0 dark:border-[#2e323b] dark:bg-[#39d5c8] dark:shadow-[4px_4px_0_#000000]"
+                title="Open Recruiter & Mentor Portal"
+              >
+                <div className="flex h-6 w-6 items-center justify-center rounded-lg border-2 border-[#171717] bg-white text-[#171717] shadow-xs transition-transform group-hover:rotate-12">
+                  <Briefcase className="h-3.5 w-3.5" />
+                </div>
+                <span>Click Here for Recruiter Portal</span>
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -661,6 +709,14 @@ export function LandingContent() {
           </div>
 
           <div className="flex items-center gap-4 text-xs font-black uppercase text-white/90">
+            <button
+              onClick={() => setTab('recruiter')}
+              className="cursor-pointer hover:underline text-[#39d5c8] flex items-center gap-1.5"
+            >
+              <Briefcase className="h-3.5 w-3.5" />
+              <span>Recruiter & Mentor Portal</span>
+            </button>
+            <span className="text-white/30">•</span>
             <button
               onClick={handleGitHubSignIn}
               className="cursor-pointer hover:underline text-[#ffd84d]"

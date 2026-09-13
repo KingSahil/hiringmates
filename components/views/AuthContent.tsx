@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Mail, Lock, User, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles, Zap } from 'lucide-react'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
+import { getAuthRedirectUrl } from '@/lib/auth-redirect'
 import { useNavigation } from '@/lib/navigation'
 
 export function AuthContent() {
@@ -60,9 +61,7 @@ export function AuthContent() {
             data: {
               display_name: displayName.trim() || 'Candidate',
             },
-            emailRedirectTo:
-              process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ??
-              (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : undefined),
+            emailRedirectTo: getAuthRedirectUrl('/auth/callback'),
           },
         })
 
@@ -76,8 +75,7 @@ export function AuthContent() {
         }
       } else if (mode === 'forgot') {
         const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-          redirectTo:
-            typeof window !== 'undefined' ? `${window.location.origin}/auth/reset-password` : undefined,
+          redirectTo: getAuthRedirectUrl('/auth/reset-password'),
         })
 
         if (resetError) {
@@ -297,7 +295,7 @@ export function AuthContent() {
                   const { error: oErr } = await supabase.auth.signInWithOAuth({
                     provider: 'github',
                     options: {
-                      redirectTo: `${window.location.origin}/auth/callback`,
+                      redirectTo: getAuthRedirectUrl('/auth/callback'),
                     },
                   })
                   if (oErr) {
@@ -325,7 +323,7 @@ export function AuthContent() {
                   const { error: oErr } = await supabase.auth.signInWithOAuth({
                     provider: 'linkedin_oidc',
                     options: {
-                      redirectTo: `${window.location.origin}/auth/callback`,
+                      redirectTo: getAuthRedirectUrl('/auth/callback'),
                     },
                   })
                   if (oErr) {
@@ -352,7 +350,7 @@ export function AuthContent() {
                   const supabase = getSupabaseBrowserClient()
                   const { error: oErr } = await supabase.auth.signInWithOAuth({
                     provider: 'google',
-                    options: { redirectTo: `${window.location.origin}/auth/callback` },
+                    options: { redirectTo: getAuthRedirectUrl('/auth/callback') },
                   })
                   if (oErr) {
                     setError(oErr.message || 'Google sign-in is not configured yet in Supabase Auth.')
