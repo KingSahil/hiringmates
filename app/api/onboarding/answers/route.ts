@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase-server'
 import { backendUrl } from '@/lib/backend'
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 /**
  * Submit assessment answers.
  *
@@ -41,6 +44,7 @@ export async function POST(request: Request) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ answers: body.answers }),
         cache: 'no-store',
+        signal: AbortSignal.timeout(55000),
       },
     )
     const payload = await res.json().catch(() => ({}))

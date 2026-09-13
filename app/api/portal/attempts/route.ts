@@ -93,6 +93,7 @@ export async function POST(request: Request) {
           include_answers: true,
         }),
         cache: 'no-store',
+        signal: AbortSignal.timeout(55000),
       })
 
       if (!res.ok) {
