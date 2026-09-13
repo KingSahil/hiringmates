@@ -10,10 +10,17 @@ import {
   Check,
   ChevronRight,
   Zap,
+  ShieldAlert,
+  ShieldCheck,
+  LockKeyhole,
+  AlertOctagon,
+  XCircle,
 } from 'lucide-react'
 import { IntakeForm } from '@/components/views/IntakeForm'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useNavigation } from '@/lib/navigation'
+import { EnvironmentShield, SecurityViolation } from '@/lib/proctoring/antiCheatEngine'
 
 interface Question {
   id: string
@@ -110,9 +117,45 @@ function renderFormattedPrompt(text: string) {
 
 export function AssessmentContent() {
   const { signInWithGithub } = useAuth()
+  const { lockAssessment, unlockAssessment } = useNavigation()
   const [signedIn, setSignedIn] = useState<boolean | null>(null)
   const [saved, setSaved] = useState<Enhanced | null>(null)
   const [session, setSession] = useState<SessionView | null>(null)
+
+  // Hardened Environment Shield & Proctoring State
+  const [isTerminated, setIsTerminated] = useState(false)
+  const [terminationReason, setTerminationReason] = useState('')
+  const isTerminatedRef = useRef(false)
+  const [tabViolations, setTabViolations] = useState(0)
+  const [showTabWarning, setShowTabWarning] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
+  const [securityViolations, setSecurityViolations] = useState<SecurityViolation[]>([])
+  const [violationToast, setViolationToast] = useState<string | null>(null)
+
+  useEffect(() => {
+    isTerminatedRef.current = isTerminated
+  }, [isTerminated])
+
+  // Invalidate Assessment immediately upon critical integrity breach
+  const invalidateAssessment = useCallback((reason: string) => {
+    if (isTerminatedRef.current) return
+    isTerminatedRef.current = true
+    setIsTerminated(true)
+    setIsPaused(true)
+    setShowTabWarning(false)
+    setTerminationReason(reason)
+    unlockAssessment()
+
+    setSecurityViolations((prev) => [
+      {
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'HARDWARE_ANOMALY',
+        detail: `CRITICAL INTEGRITY VIOLATION: ${reason}`,
+        severity: 'CRITICAL',
+      },
+      ...prev.slice(0, 19),
+    ])
+  }, [unlockAssessment])
 
   // Per-question countdown for MCQs only. Theory questions are unlimited.
   const [timeLeft, setTimeLeft] = useState<Record<string, number>>({})
@@ -187,10 +230,10 @@ export function AssessmentContent() {
     })
   }, [session?.questions])
 
-  // Tick down; lock a question when its time runs out.
+  // Tick down; lock a question when its time runs out. Pauses during alerts or termination.
   useEffect(() => {
     const ids = Object.keys(timeLeft)
-    if (!ids.length) return
+    if (!ids.length || isPaused || isTerminated) return
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         const next = { ...prev }
@@ -203,7 +246,117 @@ export function AssessmentContent() {
       })
     }, 1000)
     return () => clearInterval(timer)
-  }, [Object.keys(timeLeft).join(','), expired])
+  }, [Object.keys(timeLeft).join(','), expired, isPaused, isTerminated])
+
+  // 1. Activate Hardened Environment Shield (DevTools, shortcut traps, split-screen)
+  useEffect(() => {
+    if (session?.status !== 'awaiting' || !session.questions?.length || isTerminated) return
+
+    const shield = new EnvironmentShield((violation) => {
+      setSecurityViolations((prev) => [violation, ...prev.slice(0, 19)])
+      setViolationToast(`${violation.type}: ${violation.detail}`)
+      setTimeout(() => setViolationToast(null), 4500)
+    })
+
+    const cleanup = shield.activateShield()
+    return () => cleanup()
+  }, [session?.status, session?.questions?.length, isTerminated])
+
+  // 2. Global Assessment Navigation Lockdown
+  useEffect(() => {
+    if (session?.status === 'awaiting' && (session.questions?.length ?? 0) > 0 && !isTerminated) {
+      lockAssessment((reason) => {
+        invalidateAssessment(reason || 'Navigation violation detected during active examination.')
+      })
+      return () => {
+        unlockAssessment()
+      }
+    }
+  }, [session?.status, session?.questions?.length, isTerminated, lockAssessment, unlockAssessment, invalidateAssessment])
+
+  // 3. Tab switching & window blur detection listener
+  useEffect(() => {
+    if (session?.status !== 'awaiting' || !session.questions?.length || isTerminated) return
+
+    let lastEventTime = 0
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        const now = Date.now()
+        if (now - lastEventTime < 1500) return
+        lastEventTime = now
+
+        setSecurityViolations((prev) => [
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            type: 'TAB_SWITCH',
+            detail: 'Navigated away or switched tab during proctored evaluation.',
+            severity: 'CRITICAL',
+          },
+          ...prev.slice(0, 19),
+        ])
+
+        setTabViolations((prev) => {
+          const nextCount = prev + 1
+          if (nextCount === 1) {
+            setIsPaused(true)
+            setShowTabWarning(true)
+          } else if (nextCount >= 2) {
+            invalidateAssessment('Multiple tab switches detected during active examination session.')
+          }
+          return nextCount
+        })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [session?.status, session?.questions?.length, isTerminated, invalidateAssessment])
+
+  // 4. Clipboard protection: block copy, cut, and paste
+  useEffect(() => {
+    if (session?.status !== 'awaiting' || !session.questions?.length || isTerminated) return
+
+    const handlePaste = (e: ClipboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const violation: SecurityViolation = {
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'PASTE_BLOCKED',
+        detail: 'External clipboard paste was blocked by Environment Shield.',
+        severity: 'HIGH',
+      }
+      setSecurityViolations((prev) => [violation, ...prev.slice(0, 19)])
+      setViolationToast('Clipboard Action Blocked: External pasting is prohibited.')
+      setTimeout(() => setViolationToast(null), 4500)
+    }
+
+    const handleCopyCut = (e: ClipboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const violation: SecurityViolation = {
+        timestamp: new Date().toLocaleTimeString(),
+        type: 'DEVTOOLS_SHORTCUT',
+        detail: 'Clipboard copy/cut was blocked by Environment Shield.',
+        severity: 'WARNING',
+      }
+      setSecurityViolations((prev) => [violation, ...prev.slice(0, 19)])
+      setViolationToast('Clipboard Action Blocked: Copying question content is prohibited.')
+      setTimeout(() => setViolationToast(null), 4500)
+    }
+
+    document.addEventListener('paste', handlePaste, true)
+    document.addEventListener('copy', handleCopyCut, true)
+    document.addEventListener('cut', handleCopyCut, true)
+
+    return () => {
+      document.removeEventListener('paste', handlePaste, true)
+      document.removeEventListener('copy', handleCopyCut, true)
+      document.removeEventListener('cut', handleCopyCut, true)
+    }
+  }, [session?.status, session?.questions?.length, isTerminated])
 
   // Stagger questions entrance when backend questions arrive
   useEffect(() => {
@@ -335,9 +488,10 @@ export function AssessmentContent() {
   }
 
   const submit = async () => {
-    if (!session) return
+    if (!session || isTerminated) return
     setBusy(true)
     setError('')
+    unlockAssessment()
 
     try {
       const payload = Object.entries(answers).map(([question_id, v]) => ({
@@ -466,6 +620,12 @@ export function AssessmentContent() {
                   {session.extraction_source}
                 </span>
               )}
+              {session?.status === 'awaiting' && !isTerminated && (
+                <span className="flex items-center gap-1.5 rounded-xl border-2 border-emerald-600 bg-emerald-500/10 px-2.5 py-0.5 font-mono text-[10px] font-black uppercase text-emerald-700 dark:border-emerald-400 dark:text-emerald-400 shadow-[1px_1px_0_#059669]">
+                  <ShieldCheck className="h-3.5 w-3.5 animate-pulse" />
+                  <span>CF Shield Active</span>
+                </span>
+              )}
             </div>
             <h1 className="mt-3 font-display text-3xl sm:text-4xl uppercase tracking-wide text-[#171717] dark:text-[#f4f4f7]">
               Technical Skills Evaluation
@@ -580,9 +740,66 @@ export function AssessmentContent() {
         </section>
       )}
 
+      {/* 02.5: Disqualification Section if Integrity Terminated */}
+      {isTerminated && (
+        <section className="relative overflow-hidden rounded-2xl border-4 border-[#171717] bg-rose-50 p-6 sm:p-8 text-[#171717] shadow-[6px_6px_0_#171717] dark:border-[#000000] dark:bg-rose-950/40 dark:text-rose-200">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border-2 border-[#171717] bg-rose-600 text-white shadow-[2px_2px_0_#171717]">
+              <AlertOctagon className="h-8 w-8" />
+            </div>
+            <div>
+              <span className="rounded bg-rose-600 px-2.5 py-0.5 font-mono text-[10px] font-black uppercase text-white">
+                ASSESSMENT TERMINATED · DISQUALIFIED
+              </span>
+              <h2 className="mt-1 font-display text-2xl sm:text-3xl uppercase tracking-tight text-rose-700 dark:text-rose-400">
+                Integrity Violation Detected
+              </h2>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-xl border-2 border-[#171717] bg-white p-4 text-xs font-bold leading-relaxed text-[#171717] shadow-[2px_2px_0_#171717] dark:bg-[#15171c] dark:border-[#2e323b] dark:text-[#f4f4f7]">
+            <p>{terminationReason}</p>
+            <p className="mt-2 text-rose-600 dark:text-rose-400 font-black">
+              This assessment was automatically terminated and disqualified by the proctoring environment shield. All examination telemetry and recorded security violations have been captured for the auditing team.
+            </p>
+          </div>
+
+          {securityViolations.length > 0 && (
+            <div className="mt-5 space-y-2 font-mono text-xs">
+              <h4 className="font-black uppercase text-[11px] text-rose-800 dark:text-rose-300">
+                Security Violation Trail ({securityViolations.length} Events):
+              </h4>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {securityViolations.map((v, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-lg bg-white/70 p-2 border border-rose-200 text-[11px] text-rose-900 dark:bg-black/40 dark:border-rose-900/50 dark:text-rose-200">
+                    <span className="truncate mr-2">[{v.type}] {v.detail}</span>
+                    <span className="opacity-70 shrink-0">{v.timestamp}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* 03: Questions Section with Dynamic Visual Focus, Sizing, Lighting & Staggered Entrance */}
-      {session?.status === 'awaiting' && session.questions && session.questions.length > 0 && (
+      {session?.status === 'awaiting' && session.questions && session.questions.length > 0 && !isTerminated && (
         <div className="space-y-6">
+          {/* Violation Toast Notification */}
+          {violationToast && (
+            <div className="flex items-center justify-between rounded-xl border-2 border-rose-600 bg-rose-500/15 p-3 text-xs font-black text-rose-600 dark:text-rose-400 animate-pulse shadow-[2px_2px_0_#e11d48]">
+              <span className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                <span>{violationToast}</span>
+              </span>
+              <button
+                onClick={() => setViolationToast(null)}
+                className="cursor-pointer text-[10px] uppercase underline hover:text-rose-700 ml-3"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           {/* Sticky Progress & Navigator Bar */}
           <div className="sticky top-16 z-30 rounded-2xl border-3 border-[#171717] bg-[#fffaf0]/95 p-3.5 sm:p-4 backdrop-blur-md shadow-[4px_4px_0_#171717] transition-all dark:border-[#2e323b] dark:bg-[#0c0d11]/95 dark:shadow-[4px_4px_0_#000000]">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -623,6 +840,10 @@ export function AssessmentContent() {
 
               {/* Progress Count & Visual Bar */}
               <div className="flex items-center gap-3">
+                <div className="hidden sm:flex items-center gap-1.5 rounded-lg border border-emerald-600 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-black uppercase text-emerald-700 dark:border-emerald-400 dark:text-emerald-400 shadow-[1px_1px_0_#059669]">
+                  <ShieldCheck className="h-3 w-3 animate-pulse" />
+                  <span>Shield Active</span>
+                </div>
                 <span className="font-mono text-xs font-black text-[#171717]/70 dark:text-[#f4f4f7]/70">
                   {attemptedCount} / {totalQuestions} Done
                 </span>
@@ -879,6 +1100,47 @@ export function AssessmentContent() {
               )}
             </button>
           </div>
+
+          {/* Security Audit Log */}
+          {securityViolations.length > 0 && (
+            <div className="rounded-2xl border-2 border-[#171717]/20 bg-[#171717]/5 p-4 sm:p-5 dark:border-[#2e323b] dark:bg-[#14161d]">
+              <div className="flex items-center justify-between mb-3">
+                <span className="flex items-center gap-2 font-mono text-xs font-black uppercase text-[#171717] dark:text-[#f4f4f7]">
+                  <ShieldAlert className="h-4 w-4 text-rose-500" />
+                  Environment Shield Telemetry ({securityViolations.length} Events Logged)
+                </span>
+                <span className="font-mono text-[10px] text-[#171717]/60 dark:text-[#a1a1aa]">
+                  Active Integrity Monitor
+                </span>
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-2 text-[11px] font-mono">
+                {securityViolations.slice(0, 8).map((v, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between rounded-lg bg-white/80 p-2.5 border border-[#171717]/10 dark:bg-[#1c1f26] dark:border-[#2e323b]"
+                  >
+                    <div className="flex items-center gap-2.5 overflow-hidden">
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[9px] font-black shrink-0 ${
+                          v.severity === 'CRITICAL'
+                            ? 'bg-rose-500 text-white'
+                            : v.severity === 'HIGH'
+                            ? 'bg-amber-500 text-white'
+                            : 'bg-[#ffd84d] text-black'
+                        }`}
+                      >
+                        {v.type}
+                      </span>
+                      <span className="text-[#171717]/80 dark:text-[#d4d4d8] truncate">{v.detail}</span>
+                    </div>
+                    <span className="text-[10px] text-[#171717]/50 dark:text-[#a1a1aa] shrink-0 ml-2">
+                      {v.timestamp}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -999,6 +1261,46 @@ export function AssessmentContent() {
             </div>
           )}
         </section>
+      )}
+
+      {/* Tab Switching Warning Modal */}
+      {showTabWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-lg rounded-2xl border-4 border-[#171717] bg-[#ffd84d] p-6 text-[#171717] shadow-hard-lg dark:border-[#000000]">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 border-[#171717] bg-[#ff6b6b] text-white">
+                <AlertTriangle className="h-7 w-7" />
+              </div>
+              <div>
+                <span className="rounded bg-[#171717] px-2 py-0.5 font-mono text-[10px] font-black uppercase text-white">
+                  PROCTORING ALERT · 1 OF 1 WARNING
+                </span>
+                <h3 className="font-display text-2xl uppercase tracking-tight sm:text-3xl">
+                  Tab Switch Detected!
+                </h3>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border-2 border-[#171717] bg-white p-4 text-xs font-bold leading-relaxed text-[#171717] shadow-[2px_2px_0_#171717]">
+              <p>
+                You navigated away from this proctored assessment window. Leaving the assessment, switching tabs, or minimizing the active window is strictly monitored.
+              </p>
+              <p className="mt-2 text-rose-700 font-black">
+                ⚠️ THIS IS YOUR FIRST AND FINAL WARNING. If you switch tabs or leave this window again, your assessment session will be IMMEDIATELY TERMINATED with an automatic disqualification flag.
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                setShowTabWarning(false)
+                setIsPaused(false)
+              }}
+              className="btn-neo btn-neo-ink mt-5 w-full py-3 text-xs uppercase cursor-pointer"
+            >
+              I Understand — Resume Assessment
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

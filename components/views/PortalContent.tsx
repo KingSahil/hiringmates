@@ -1,6 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import {
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
+  CheckCircle2,
+  AlertCircle,
+} from 'lucide-react'
 import { portalRoleFor } from '@/lib/portal'
 import { useAuth } from '@/lib/auth'
 import { useNavigation } from '@/lib/navigation'
@@ -26,6 +33,43 @@ interface QuestionItem {
   correct_index: number | null
 }
 
+interface SkillTag {
+  name: string
+  confidence: string
+  evidence: string[]
+}
+
+interface RoughProfile {
+  summary?: string
+  headline?: string
+  strengths?: string[]
+  gaps?: string[]
+  evidence?: string[]
+}
+
+interface GradeCriteria {
+  criterion: string
+  score: number
+  evidence?: string
+}
+
+interface CandidateProfilePayload {
+  summary?: string
+  tags?: string[]
+  skills?: SkillTag[]
+  rough?: RoughProfile
+  grade?: {
+    criteria?: GradeCriteria[]
+    total?: number
+    verdict?: string
+    mcq_correct?: number
+    mcq_total?: number
+  }
+  theory_elapsed_seconds?: number | null
+  mcq_elapsed_seconds?: number | null
+  cloned?: { name: string; path?: string; loc?: number }[]
+}
+
 interface PassedStudent {
   attempt_id: string
   position_id: string
@@ -33,6 +77,8 @@ interface PassedStudent {
   student_id: string
   student_name: string
   score: number | null
+  created_at?: string
+  profile?: CandidateProfilePayload | null
 }
 
 interface Slot {
@@ -93,9 +139,17 @@ export function PortalContent() {
   const [qOptionsList, setQOptionsList] = useState<string[]>(['', '', '', ''])
   const [qCorrect, setQCorrect] = useState(0)
 
-  // Mentor: booking
+  // Mentor: booking & profiles
   const [slotFor, setSlotFor] = useState<PassedStudent | null>(null)
   const [slotAt, setSlotAt] = useState('')
+  const [expandedProfiles, setExpandedProfiles] = useState<Record<string, boolean>>({})
+
+  const toggleProfile = (attemptId: string) => {
+    setExpandedProfiles((prev) => ({
+      ...prev,
+      [attemptId]: !prev[attemptId],
+    }))
+  }
 
   const load = useCallback(async () => {
     if (!role) return
@@ -942,51 +996,232 @@ export function PortalContent() {
               )}
 
               <div className="mt-6 grid gap-4">
-                {students.map((s) => (
-                  <article
-                    key={s.attempt_id}
-                    className="card-neo flex flex-wrap items-center justify-between gap-4 p-6"
-                  >
-                    <div>
-                      <h3 className="font-display text-3xl leading-none">
-                        {s.student_name}
-                      </h3>
-                      <p className="mt-2 font-mono text-[10px] font-black uppercase tracking-wider opacity-60">
-                        {s.position_role} · {s.score ?? '—'}%
-                      </p>
-                    </div>
-                    <button
-                      className="btn-neo btn-neo-lemon"
-                      onClick={() =>
-                        setSlotFor(
-                          slotFor?.attempt_id === s.attempt_id ? null : s,
-                        )
-                      }
-                    >
-                      {slotFor?.attempt_id === s.attempt_id
-                        ? 'Cancel'
-                        : 'Give time slot'}
-                    </button>
+                {students.map((s) => {
+                  const isExpanded = !!expandedProfiles[s.attempt_id]
+                  const isBooking = slotFor?.attempt_id === s.attempt_id
+                  const profile = s.profile
+                  const hasProfile = !!profile
 
-                    {slotFor?.attempt_id === s.attempt_id && (
-                      <div className="grid w-full gap-3 border-t-2 border-ink/10 pt-5 sm:grid-cols-2">
-                        <input
-                          className={field}
-                          type="datetime-local"
-                          value={slotAt}
-                          onChange={(e) => setSlotAt(e.target.value)}
-                        />
-                        <button
-                          className="btn-neo btn-neo-iris"
-                          onClick={bookSlot}
-                          disabled={busy}
-                        >
-                          Book &amp; notify
-                        </button>
+                  return (
+                    <article
+                      key={s.attempt_id}
+                      className="card-neo flex flex-col gap-4 p-6"
+                    >
+                      {/* Top Header Row */}
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <h3 className="font-display text-3xl leading-none">
+                              {s.student_name}
+                            </h3>
+                            {profile?.grade?.verdict && (
+                              <span className="badge-neo bg-lemon px-2.5 py-0.5 font-mono text-[11px] font-black uppercase">
+                                {profile.grade.verdict}
+                              </span>
+                            )}
+                            {profile?.grade?.total !== undefined && (
+                              <span className="badge-neo bg-mint px-2.5 py-0.5 font-mono text-[11px] font-black uppercase">
+                                Rating: {profile.grade.total}/5
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-mono text-[10px] font-black uppercase tracking-wider opacity-60">
+                            {s.position_role} · Round 1 Score: {s.score ?? '—'}%
+                            {s.created_at && ` · ${new Date(s.created_at).toLocaleDateString()}`}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          {hasProfile && (
+                            <button
+                              type="button"
+                              className="btn-neo btn-neo-mint flex items-center gap-1.5 px-3.5 py-2 text-xs font-black uppercase"
+                              onClick={() => toggleProfile(s.attempt_id)}
+                            >
+                              <Sparkles className="h-3.5 w-3.5" />
+                              <span>{isExpanded ? 'Hide Profile' : 'Polished Profile'}</span>
+                              {isExpanded ? (
+                                <ChevronUp className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="btn-neo btn-neo-lemon px-4 py-2 text-xs font-black uppercase"
+                            onClick={() =>
+                              setSlotFor(isBooking ? null : s)
+                            }
+                          >
+                            {isBooking ? 'Cancel' : 'Give time slot'}
+                          </button>
+                        </div>
                       </div>
-                    )}
-                  </article>
-                ))}
+
+                      {/* Headline & Summary preview */}
+                      {hasProfile ? (
+                        <div className="rounded-xl border-2 border-ink/10 bg-paper/60 p-4 dark:border-white/10 dark:bg-black/20">
+                          {profile.rough?.headline && (
+                            <div className="flex items-center gap-2">
+                              <Sparkles className="h-4 w-4 shrink-0 text-mint" />
+                              <h4 className="font-display text-lg uppercase tracking-wide text-ink dark:text-paper">
+                                {profile.rough.headline}
+                              </h4>
+                            </div>
+                          )}
+                          {(profile.summary || profile.rough?.summary) && (
+                            <p className="mt-1.5 text-xs sm:text-sm leading-relaxed text-ink/80 dark:text-paper/80">
+                              {profile.summary || profile.rough?.summary}
+                            </p>
+                          )}
+                          {profile.tags && profile.tags.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-1.5">
+                              {profile.tags.map((t) => (
+                                <span
+                                  key={t}
+                                  className="rounded border border-ink/30 bg-mint/20 px-2 py-0.5 font-mono text-[10px] font-black uppercase tracking-wider text-ink dark:border-white/20 dark:bg-mint/10 dark:text-paper"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-ink/20 p-3 text-xs opacity-60">
+                          No RAG polished profile generated yet for this candidate.
+                        </div>
+                      )}
+
+                      {/* Detailed Expanded View */}
+                      {hasProfile && isExpanded && (
+                        <div className="space-y-4 border-t-2 border-ink/10 pt-4 dark:border-white/10">
+                          {/* Strengths & Gaps */}
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            {/* Strengths */}
+                            <div className="rounded-xl border-2 border-mint bg-mint/10 p-4 dark:border-mint/50">
+                              <div className="flex items-center gap-2 mb-2">
+                                <CheckCircle2 className="h-4 w-4 text-ink dark:text-paper" />
+                                <h5 className="font-mono text-xs font-black uppercase tracking-wider">
+                                  Strengths &amp; Highlights
+                                </h5>
+                              </div>
+                              {profile.rough?.strengths && profile.rough.strengths.length > 0 ? (
+                                <ul className="space-y-1.5 text-xs text-ink/80 dark:text-paper/80 list-disc list-inside">
+                                  {profile.rough.strengths.map((str, idx) => (
+                                    <li key={idx} className="leading-relaxed">
+                                      {str}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-xs opacity-60">No specific strengths listed.</p>
+                              )}
+                            </div>
+
+                            {/* Gaps / Areas to probe */}
+                            <div className="rounded-xl border-2 border-lemon bg-lemon/10 p-4 dark:border-lemon/50">
+                              <div className="flex items-center gap-2 mb-2">
+                                <AlertCircle className="h-4 w-4 text-ink dark:text-paper" />
+                                <h5 className="font-mono text-xs font-black uppercase tracking-wider">
+                                  Areas to Probe / Growth Gaps
+                                </h5>
+                              </div>
+                              {profile.rough?.gaps && profile.rough.gaps.length > 0 ? (
+                                <ul className="space-y-1.5 text-xs text-ink/80 dark:text-paper/80 list-disc list-inside">
+                                  {profile.rough.gaps.map((gap, idx) => (
+                                    <li key={idx} className="leading-relaxed">
+                                      {gap}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-xs opacity-60">No major gaps detected.</p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Competencies & Skills */}
+                          {profile.skills && profile.skills.length > 0 && (
+                            <div>
+                              <h5 className="mb-2 font-mono text-xs font-black uppercase tracking-wider opacity-60">
+                                Verified Competencies &amp; Evidence
+                              </h5>
+                              <div className="grid gap-2.5 sm:grid-cols-2">
+                                {profile.skills.map((skill) => (
+                                  <div
+                                    key={skill.name}
+                                    className="rounded-lg border border-ink/20 bg-white p-3 dark:border-white/10 dark:bg-black/30"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="font-bold text-xs">{skill.name}</span>
+                                      <span
+                                        className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-black uppercase ${
+                                          skill.confidence === 'high'
+                                            ? 'bg-mint text-ink'
+                                            : 'bg-lemon text-ink'
+                                        }`}
+                                      >
+                                        {skill.confidence} confidence
+                                      </span>
+                                    </div>
+                                    {skill.evidence && skill.evidence.length > 0 && (
+                                      <p className="mt-1.5 text-[11px] leading-relaxed opacity-70">
+                                        {skill.evidence.join(' · ')}
+                                      </p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Rubric breakdown */}
+                          {profile.grade?.criteria && profile.grade.criteria.length > 0 && (
+                            <div>
+                              <h5 className="mb-2 font-mono text-xs font-black uppercase tracking-wider opacity-60">
+                                Detailed Rubric Scoring
+                              </h5>
+                              <div className="divide-y divide-ink/10 rounded-lg border border-ink/20 bg-white dark:divide-white/10 dark:border-white/10 dark:bg-black/30">
+                                {profile.grade.criteria.map((c) => (
+                                  <div key={c.criterion} className="flex items-center justify-between p-2.5 text-xs">
+                                    <div className="space-y-0.5 pr-4">
+                                      <span className="font-bold">{c.criterion}</span>
+                                      {c.evidence && <p className="text-[11px] opacity-60">{c.evidence}</p>}
+                                    </div>
+                                    <span className="font-mono font-black text-sm whitespace-nowrap">
+                                      {c.score} / 5
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Time slot booking drawer */}
+                      {isBooking && (
+                        <div className="grid w-full gap-3 border-t-2 border-ink/10 pt-4 sm:grid-cols-2 dark:border-white/10">
+                          <input
+                            className={field}
+                            type="datetime-local"
+                            value={slotAt}
+                            onChange={(e) => setSlotAt(e.target.value)}
+                          />
+                          <button
+                            className="btn-neo btn-neo-iris"
+                            onClick={bookSlot}
+                            disabled={busy}
+                          >
+                            Book &amp; notify
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  )
+                })}
               </div>
             </section>
 
