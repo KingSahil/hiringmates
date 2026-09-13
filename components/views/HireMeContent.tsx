@@ -1099,7 +1099,6 @@ export function HireMeContent() {
               { id: 'profile', label: 'Profile' },
               { id: 'check', label: 'System' },
               { id: 'assessment', label: 'Assessment' },
-              { id: 'admin', label: 'Recruiter' },
             ].map((item) => (
               <button
                 key={item.id}
@@ -1153,12 +1152,6 @@ export function HireMeContent() {
                   className="btn-neo btn-neo-aqua text-xs"
                 >
                   Configure Profile & Start <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={() => setStep('admin')}
-                  className="btn-neo btn-neo-paper text-xs"
-                >
-                  Recruiter Portal
                 </button>
               </div>
             </div>
@@ -2542,12 +2535,6 @@ export function HireMeContent() {
                   >
                     <Video className="h-3.5 w-3.5 fill-current" />
                     <span>Join Round 2: Mentorship Call</span>
-                  </button>
-                  <button
-                    onClick={() => setStep('admin')}
-                    className="btn-neo btn-neo-aqua py-2 text-xs"
-                  >
-                    Inspect Scorecard <ArrowRight className="h-3.5 w-3.5" />
                   </button>
                   <button
                     onClick={() => setTab('codemates')}
