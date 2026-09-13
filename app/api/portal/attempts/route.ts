@@ -6,6 +6,9 @@ import {
   studentActor,
 } from '@/lib/portal-server'
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 /** Fisher-Yates — used to randomise the manual pool per attempt. */
 function shuffle<T>(items: T[]): T[] {
   const out = [...items]
@@ -77,7 +80,8 @@ export async function POST(request: Request) {
   } else {
     // Auto: a fresh set generated from the role brief on every attempt.
     try {
-      const res = await fetch(`${backendUrl()}/positions/questions`, {
+      const targetUrl = `${backendUrl()}/positions/questions`
+      const res = await fetch(targetUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -92,16 +96,27 @@ export async function POST(request: Request) {
       })
 
       if (!res.ok) {
+        const errorPayload = await res.json().catch(() => ({}))
         return NextResponse.json(
-          { error: 'backend_error', message: 'Question generation failed.' },
+          {
+            error: 'backend_error',
+            message: 'Question generation failed.',
+            detail: errorPayload,
+          },
           { status: 502 },
         )
       }
       const payload = await res.json()
       questions = payload.questions ?? []
-    } catch {
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err)
+      console.error('Failed to reach RAG backend for position questions:', err)
       return NextResponse.json(
-        { error: 'backend_unreachable' },
+        {
+          error: 'backend_unreachable',
+          message: `Could not reach RAG backend at ${process.env.BACKEND_BASE_URL ?? '(unset)'}.`,
+          detail,
+        },
         { status: 503 },
       )
     }

@@ -704,7 +704,7 @@ class GitHubClient:
     query($login: String!, $cursor: String) {
       user(login: $login) {
         login
-        repositories(first: 100, after: $cursor, ownerAffiliations: OWNER,
+        repositories(first: 25, after: $cursor, ownerAffiliations: OWNER,
                      orderBy: {field: PUSHED_AT, direction: DESC}) {
           totalCount
           pageInfo { hasNextPage endCursor }

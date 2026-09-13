@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { getSupabaseAdminClient, studentActor } from '@/lib/portal-server'
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 interface SubmittedAnswer {
   question_id?: string
   selected_index?: number | null

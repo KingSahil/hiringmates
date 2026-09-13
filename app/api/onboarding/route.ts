@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { getSupabaseServerClient } from '@/lib/supabase-server'
 import { backendUrl, buildIdentity } from '@/lib/backend'
 
+export const maxDuration = 60
+export const dynamic = 'force-dynamic'
+
 /**
  * Onboarding bridge.
  *
