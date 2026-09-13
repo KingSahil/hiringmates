@@ -74,13 +74,26 @@ export function MentorshipMeetContent() {
   const { user, isAuthorized } = useAuth()
 
   // Meeting Identity & Roles
-  const [meetingId] = useState(() => {
+  const [meetingId, setMeetingId] = useState(() => {
     if (typeof window !== 'undefined') {
       const fromUrl = new URLSearchParams(window.location.search).get('meeting')
       if (fromUrl) return fromUrl
     }
     return 'mentorship-r2-northstar'
   })
+
+  useEffect(() => {
+    const handleUrlChange = () => {
+      if (typeof window === 'undefined') return
+      const fromUrl = new URLSearchParams(window.location.search).get('meeting')
+      if (fromUrl && fromUrl !== meetingId) {
+        setMeetingId(fromUrl)
+      }
+    }
+    handleUrlChange()
+    window.addEventListener('popstate', handleUrlChange)
+    return () => window.removeEventListener('popstate', handleUrlChange)
+  }, [meetingId])
   const [copiedLink, setCopiedLink] = useState(false)
   const isMentor = isAuthorized ? isMentorEmail(user?.email) : activeRole === 'mentor'
 

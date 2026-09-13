@@ -147,6 +147,7 @@ export function RecruiterPortal() {
     'Congratulations on completing Round 1! We would love to invite you to Round 2 for a 1-on-1 technical systems discussion and live mentorship session.'
   )
   const [contactSuccessToast, setContactSuccessToast] = useState<string | null>(null)
+  const [lastDispatchedMeetingId, setLastDispatchedMeetingId] = useState<string | null>(null)
 
   const filteredStudents = students.filter((s) => {
     const matchesSearch =
@@ -178,10 +179,13 @@ export function RecruiterPortal() {
       )
     )
 
+    const mId = `mentorship-${studentId.slice(0, 8)}`
+    setLastDispatchedMeetingId(mId)
+
     // Trigger targeted in-app notification for candidate & mentor
     triggerRound2Notification('candidate', studentName, studentId, {
       subtitle: `Invited to Round 2 by recruiter for ${meetingDate}.`,
-      meetingId: `mentorship-${studentId.slice(0, 8)}`,
+      meetingId: mId,
     })
     setActiveRole('mentor')
 
@@ -234,7 +238,10 @@ export function RecruiterPortal() {
             <button
               onClick={() => {
                 setActiveRole('mentor')
-                setTab('mentorship')
+                setTab(
+                  'mentorship',
+                  lastDispatchedMeetingId ? `?meeting=${encodeURIComponent(lastDispatchedMeetingId)}` : undefined
+                )
               }}
               className="btn-neo btn-neo-ink px-3 py-1 text-[10px] flex items-center gap-1"
             >

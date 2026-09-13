@@ -241,6 +241,23 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null)
   const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null)
+  const [showEndSessionModal, setShowEndSessionModal] = useState(false)
+  const cameraStreamRef = useRef<MediaStream | null>(null)
+  const micStreamRef = useRef<MediaStream | null>(null)
+  const screenStreamRef = useRef<MediaStream | null>(null)
+
+  useEffect(() => {
+    cameraStreamRef.current = cameraStream
+  }, [cameraStream])
+
+  useEffect(() => {
+    micStreamRef.current = micStream
+  }, [micStream])
+
+  useEffect(() => {
+    screenStreamRef.current = screenStream
+  }, [screenStream])
+
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedCameraId, setSelectedCameraId] = useState<string>('')
   const [cameraReady, setCameraReady] = useState(false)
@@ -383,13 +400,23 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
   const animFrameRef = useRef<number | null>(null)
 
   // Screen Details API multi-monitor check
-  useEffect(() => {
+  const checkScreenSetup = useCallback(() => {
     try {
       if ((window.screen as any)?.isExtended) {
         setMultiMonitorDetected(true)
+      } else {
+        setMultiMonitorDetected(false)
       }
-    } catch {}
+    } catch {
+      setMultiMonitorDetected(false)
+    }
   }, [])
+
+  useEffect(() => {
+    checkScreenSetup()
+    window.addEventListener('resize', checkScreenSetup)
+    return () => window.removeEventListener('resize', checkScreenSetup)
+  }, [checkScreenSetup])
 
   // Interactive Flight Recorder Replay loop in Admin Review
   useEffect(() => {
@@ -614,6 +641,14 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
       setScreenStream(stream)
       setScreenReady(true)
 
+      // Ensure camera video preview remains playing and active after screen share picker closes
+      if (videoPreviewRef.current && cameraStreamRef.current) {
+        if (videoPreviewRef.current.srcObject !== cameraStreamRef.current) {
+          videoPreviewRef.current.srcObject = cameraStreamRef.current
+        }
+        videoPreviewRef.current.play().catch(() => {})
+      }
+
       const videoTrack = stream.getVideoTracks()[0]
       if (videoTrack) {
         videoTrack.onended = () => {
@@ -683,6 +718,28 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
       videoPreviewRef.current.play().catch(() => {})
     }
   }, [cameraStream, step])
+
+  // Resume camera preview if window temporarily lost focus (e.g. during screen share dialog)
+  useEffect(() => {
+    const handleResumeVideo = () => {
+      const vid = videoPreviewRef.current
+      const cam = cameraStreamRef.current
+      if (vid && cam) {
+        if (vid.srcObject !== cam) {
+          vid.srcObject = cam
+        }
+        if (vid.paused) {
+          vid.play().catch(() => {})
+        }
+      }
+    }
+    window.addEventListener('focus', handleResumeVideo)
+    document.addEventListener('visibilitychange', handleResumeVideo)
+    return () => {
+      window.removeEventListener('focus', handleResumeVideo)
+      document.removeEventListener('visibilitychange', handleResumeVideo)
+    }
+  }, [])
 
   // Attach camera stream to floating PIP element during assessment
   useEffect(() => {
@@ -1033,8 +1090,21 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
 
   const finishAssessment = useCallback(() => {
     void submitToBackend()
+    if (cameraStream) {
+      try { cameraStream.getTracks().forEach((t) => t.stop()) } catch {}
+    }
+    if (micStream) {
+      try { micStream.getTracks().forEach((t) => t.stop()) } catch {}
+    }
+    if (screenStream) {
+      try { screenStream.getTracks().forEach((t) => t.stop()) } catch {}
+    }
+    setCameraReady(false)
+    setMicReady(false)
+    setScreenReady(false)
+    unlockAssessment()
     setStep('results')
-  }, [submitToBackend])
+  }, [submitToBackend, cameraStream, micStream, screenStream, unlockAssessment])
 
   // Re-seed the countdowns and index whenever the question set is swapped in.
   useEffect(() => {
@@ -1989,6 +2059,18 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
                   {isPaused ? <Play className="inline h-3 w-3" /> : <Pause className="inline h-3 w-3" />}
                   <span className="ml-1">{isPaused ? 'Resume' : 'Pause'}</span>
                 </button>
+
+                <button
+                  onClick={() => {
+                    setIsPaused(true)
+                    setShowEndSessionModal(true)
+                  }}
+                  className="cursor-pointer flex items-center gap-1 rounded-lg border border-rose-500 bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300 transition-colors"
+                  title="End and submit assessment session"
+                >
+                  <XCircle className="h-3 w-3" />
+                  <span>End Session</span>
+                </button>
               </div>
             </div>
 
@@ -2246,6 +2328,52 @@ export function HireMeContent({ position, onComplete, onExit }: HireMeContentPro
               >
                 I Understand — Resume Assessment
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* End Session Confirmation Modal */}
+        {showEndSessionModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs animate-in fade-in duration-150">
+            <div className="w-full max-w-md rounded-2xl border-4 border-[#171717] bg-white p-6 text-[#171717] shadow-hard-lg dark:border-[#000000] dark:bg-[#15171c] dark:text-[#f4f4f7]">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border-2 border-[#171717] bg-rose-500 text-white">
+                  <XCircle className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="font-display text-xl uppercase tracking-tight">
+                    End Assessment Session?
+                  </h3>
+                  <p className="text-[11px] text-[#171717]/70 dark:text-[#a1a1aa]">
+                    Submit current answers and finish proctoring
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-[#171717]/15 bg-[#fffaf0] p-3 text-xs font-bold leading-relaxed text-[#171717] dark:border-[#2e323b] dark:bg-[#1c1f26] dark:text-[#d4d4d8]">
+                Are you sure you want to end your engineering assessment? Your answers will be submitted for grading and all proctoring hardware streams will be stopped.
+              </div>
+
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  onClick={() => {
+                    setShowEndSessionModal(false)
+                    setIsPaused(false)
+                  }}
+                  className="btn-neo btn-neo-paper py-2 px-3 text-xs cursor-pointer"
+                >
+                  Cancel & Continue
+                </button>
+                <button
+                  onClick={() => {
+                    setShowEndSessionModal(false)
+                    finishAssessment()
+                  }}
+                  className="btn-neo btn-neo-lemon py-2 px-4 text-xs font-black cursor-pointer"
+                >
+                  Yes, End & Submit
+                </button>
+              </div>
             </div>
           </div>
         )}

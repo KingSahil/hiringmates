@@ -13,7 +13,7 @@ export type AppTab =
 
 interface NavigationContextType {
   tab: AppTab
-  setTab: (tab: AppTab) => void
+  setTab: (tab: AppTab, search?: string) => void
   isAssessmentLocked: boolean
   lockAssessment: (onViolation?: (reason: string) => void) => void
   unlockAssessment: () => void
@@ -96,7 +96,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     }
   }, [isAssessmentLocked])
 
-  const setTab = useCallback((newTab: AppTab) => {
+  const setTab = useCallback((newTab: AppTab, search?: string) => {
     if (isAssessmentLocked && newTab !== tabRef.current) {
       // VIOLATION: Tried to navigate away while assessment was locked!
       if (violationHandlerRef.current) {
@@ -107,9 +107,15 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
 
     setTabState(newTab)
     if (typeof window !== 'undefined') {
-      const newPath = newTab === 'home' ? '/' : `/${newTab}`
-      if (window.location.pathname !== newPath) {
-        window.history.pushState(null, '', newPath)
+      const basePath = newTab === 'home' ? '/' : `/${newTab}`
+      const fullPath = search
+        ? `${basePath}${search.startsWith('?') ? search : `?${search}`}`
+        : basePath
+      if (
+        window.location.pathname !== basePath ||
+        (search && window.location.search !== (search.startsWith('?') ? search : `?${search}`))
+      ) {
+        window.history.pushState(null, '', fullPath)
       }
       window.scrollTo({ top: 0, behavior: 'instant' })
     }

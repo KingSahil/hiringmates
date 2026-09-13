@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { portalRoleFor } from '@/lib/portal'
 import { useAuth } from '@/lib/auth'
+import { useNavigation } from '@/lib/navigation'
 import { getSupabaseBrowserClient } from '@/lib/supabase'
 
 interface Position {
@@ -55,6 +56,7 @@ async function api(path: string, init?: RequestInit) {
 
 export function PortalContent() {
   const { user, loading, signOut } = useAuth()
+  const { setTab } = useNavigation()
   const role = portalRoleFor(user?.email)
 
   const [positions, setPositions] = useState<Position[]>([])
@@ -1005,6 +1007,11 @@ export function PortalContent() {
                       </span>
                       <a
                         href={`/mentorship?meeting=${encodeURIComponent(s.meeting_id)}`}
+                        onClick={(e) => {
+                          if (e.metaKey || e.ctrlKey) return
+                          e.preventDefault()
+                          setTab('mentorship', `?meeting=${encodeURIComponent(s.meeting_id)}`)
+                        }}
                         className="flex items-center gap-1.5 border-2 border-ink bg-aqua px-3 py-1 font-mono text-[10px] font-black uppercase tracking-wider text-ink shadow-[2px_2px_0_#000] hover:bg-[#ffd84d] transition-all cursor-pointer"
                         title="Join video call"
                       >

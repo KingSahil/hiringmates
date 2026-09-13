@@ -45,11 +45,9 @@ export function NotificationBell() {
   const handleJoinCall = (notifId: string) => {
     markAsRead(notifId)
     setIsOpen(false)
-    // Switch tab first — setTab rewrites the path — then stamp the room id on
-    // the URL so the mentorship view opens THIS mentor's private room rather
-    // than a shared default.
-    setTab('mentorship')
     const notif = notifications.find((n) => n.id === notifId)
+    const query = notif?.meetingId ? `?meeting=${encodeURIComponent(notif.meetingId)}` : ''
+    setTab('mentorship', query)
     if (notif?.meetingId) joinMeeting(notif.meetingId)
   }
 

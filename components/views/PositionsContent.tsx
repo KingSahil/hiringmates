@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Sparkles, Wifi } from 'lucide-react'
 import { HireMeContent, HireMePosition } from '@/components/views/HireMeContent'
+import { useNavigation } from '@/lib/navigation'
 
 interface Position extends HireMePosition {
   id: string
@@ -47,6 +48,7 @@ const BADGE_ACCENTS = [
 ]
 
 export function PositionsContent() {
+  const { setTab } = useNavigation()
   const [selectedProctorPosition, setSelectedProctorPosition] = useState<Position | null>(null)
   const [positions, setPositions] = useState<Position[]>([])
   const [slots, setSlots] = useState<Slot[]>([])
@@ -368,6 +370,11 @@ export function PositionsContent() {
                   </div>
                   <a
                     href={`/mentorship?meeting=${encodeURIComponent(s.meeting_id)}`}
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey) return
+                      e.preventDefault()
+                      setTab('mentorship', `?meeting=${encodeURIComponent(s.meeting_id)}`)
+                    }}
                     className="flex items-center gap-1.5 border-2 border-ink bg-aqua px-3 py-1 font-mono text-[10px] font-black uppercase tracking-wider text-ink shadow-[2px_2px_0_#000] hover:bg-[#ffd84d] transition-all cursor-pointer"
                     title="Join video call"
                   >

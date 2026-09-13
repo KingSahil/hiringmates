@@ -368,11 +368,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   const joinMeeting = useCallback((meetingId: string) => {
     if (typeof window === 'undefined') return
-    window.history.replaceState(
-      null,
-      '',
-      `/mentorship?meeting=${encodeURIComponent(meetingId)}`,
-    )
+    const url = `/mentorship?meeting=${encodeURIComponent(meetingId)}`
+    if (window.location.pathname + window.location.search !== url) {
+      window.history.pushState(null, '', url)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }
   }, [])
 
   const markAllAsRead = useCallback(async () => {

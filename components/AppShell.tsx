@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigation, AppTab } from '@/lib/navigation'
 import { useAuth } from '@/lib/auth'
 import { LandingContent } from '@/components/views/LandingContent'
@@ -24,6 +24,13 @@ export function AppShell({ initialTab }: AppShellProps) {
   const autoCheckRef = useRef(false)
   const wasAuthorizedRef = useRef<boolean | null>(null)
 
+  const [mounted, setMounted] = useState(false)
+  const isRootPath = typeof window !== 'undefined' && window.location.pathname === '/'
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   // Redirect to unauthorized home page whenever ANY account logs out anytime
   useEffect(() => {
     if (loading) return
@@ -46,10 +53,10 @@ export function AppShell({ initialTab }: AppShellProps) {
   const portalRole = portalRoleForUser(user) || portalRoleFor(user?.email)
   useEffect(() => {
     if (loading || !isAuthorized || !portalRole) return
-    if (tab === 'home') {
+    if (tab === 'home' && (isRootPath || (typeof window !== 'undefined' && window.location.pathname === '/'))) {
       setTab('portal')
     }
-  }, [loading, isAuthorized, portalRole, tab, setTab])
+  }, [loading, isAuthorized, portalRole, tab, setTab, isRootPath])
 
   // First sign-in for an account that has never been registered: start the
   // profiling pipeline and drop the candidate straight into the assessment.
@@ -100,10 +107,11 @@ export function AppShell({ initialTab }: AppShellProps) {
     }
   }, [initialTab, setTab, tab])
 
-  const isRootPath = typeof window !== 'undefined' && window.location.pathname === '/'
-  const currentTab = isRootPath
+  const currentTab = !mounted && initialTab
+    ? initialTab
+    : isRootPath
     ? (portalRole ? 'portal' : 'home')
-    : (initialTab || tab)
+    : tab
 
   return (
     <main className="w-full">
