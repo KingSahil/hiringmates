@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { Loader2, Sparkles, Wifi } from 'lucide-react'
 
 interface Position {
   id: string
@@ -56,6 +57,7 @@ export function PositionsContent() {
   const [result, setResult] = useState<{ score: number | null; passed: boolean } | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loadingPositionId, setLoadingPositionId] = useState<string | null>(null)
 
   const load = async () => {
     const { data } = await api('/api/portal/positions')
@@ -72,19 +74,30 @@ export function PositionsContent() {
     setError('')
     setResult(null)
     setBusy(true)
-    const { ok, data } = await api('/api/portal/attempts', {
-      method: 'POST',
-      body: JSON.stringify({ position_id: position.id }),
-    })
-    setBusy(false)
-    if (!ok) {
-      setError(data.message ?? data.error ?? 'Could not start this application.')
-      return
+    setLoadingPositionId(position.id)
+    try {
+      const { ok, data } = await api('/api/portal/attempts', {
+        method: 'POST',
+        body: JSON.stringify({ position_id: position.id }),
+      })
+      if (!ok) {
+        setError(data.message ?? data.error ?? 'Could not start this application.')
+        return
+      }
+      setAttemptId(data.attempt_id)
+      setQuestions(data.questions ?? [])
+      setActiveRole(position.role)
+      setAnswers({})
+      // Smooth scroll to top to view round 1 questions
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 180, behavior: 'smooth' })
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to connect to assessment backend.')
+    } finally {
+      setBusy(false)
+      setLoadingPositionId(null)
     }
-    setAttemptId(data.attempt_id)
-    setQuestions(data.questions ?? [])
-    setActiveRole(position.role)
-    setAnswers({})
   }
 
   const submit = async () => {
@@ -218,11 +231,18 @@ export function PositionsContent() {
             </div>
 
             <button
-              className="btn-neo btn-neo-lemon mt-8"
+              className="btn-neo btn-neo-lemon mt-8 flex items-center gap-2"
               onClick={submit}
               disabled={busy}
             >
-              {busy ? 'Submitting…' : 'Submit answers'}
+              {busy && !loadingPositionId ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Submitting…</span>
+                </>
+              ) : (
+                'Submit answers'
+              )}
             </button>
           </section>
         )}
@@ -236,6 +256,24 @@ export function PositionsContent() {
             </span>
           </div>
 
+          {loadingPositionId && (
+            <div className="mt-6 flex items-center gap-3 border-2 border-ink bg-lemon/20 px-5 py-3.5 font-mono text-xs font-bold text-ink shadow-hard-sm dark:border-lemon dark:bg-lemon/10 dark:text-lemon">
+              <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+              <div className="flex flex-1 flex-wrap items-center justify-between gap-2">
+                <span>
+                  Preparing assessment for{' '}
+                  <strong className="underline">
+                    {positions.find((pos) => pos.id === loadingPositionId)?.role || 'role'}
+                  </strong>
+                  … Fetching fresh questions from backend
+                </span>
+                <span className="text-[10px] tracking-wider uppercase opacity-75">
+                  Please wait
+                </span>
+              </div>
+            </div>
+          )}
+
           {positions.length === 0 && (
             <p className="mt-4 max-w-xl text-sm leading-7 opacity-70">
               No company has published a card yet. Sign in with the company account
@@ -246,6 +284,7 @@ export function PositionsContent() {
           <div className="mt-6 grid gap-6 md:grid-cols-2">
             {positions.map((p, i) => {
               const accent = BADGE_ACCENTS[i % BADGE_ACCENTS.length]
+              const isCardLoading = loadingPositionId === p.id
               return (
                 <article
                   key={p.id}
@@ -286,11 +325,22 @@ export function PositionsContent() {
                       Pass mark {p.pass_threshold}%
                     </span>
                     <button
-                      className="btn-neo btn-neo-lemon"
+                      className={`btn-neo flex items-center justify-center gap-2 transition-all ${
+                        isCardLoading
+                          ? 'bg-lemon text-ink opacity-90 cursor-wait shadow-none translate-x-[2px] translate-y-[2px]'
+                          : 'btn-neo-lemon'
+                      }`}
                       onClick={() => start(p)}
                       disabled={busy}
                     >
-                      Apply
+                      {isCardLoading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                          <span>Loading…</span>
+                        </>
+                      ) : (
+                        'Apply'
+                      )}
                     </button>
                   </div>
                 </article>
