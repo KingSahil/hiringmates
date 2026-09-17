@@ -62,7 +62,7 @@ Modern technical recruitment is facing an existential integrity crisis:
   - Real-time multiplayer coding competitions featuring dynamic Monaco Editor synchronization, live cursor broadcasting, presence tracking, and instant automated integrity audits.
 * 🔍 **Automated GitHub Profiling & Tailored RAG Backend**:
   - Standalone MCP server that deep-indexes candidate GitHub repositories, computes structural fingerprints (CI, Docker, tests, LOC), and generates unique, non-repeating assessment questions tailored to the candidate's exact background.
-
+lmao
 ---
 
 ## 🏛️ High-Level Architecture
